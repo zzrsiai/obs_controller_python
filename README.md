@@ -1,0 +1,2 @@
+# obs_controller_python
+一切起源于我常用的obs控制台网站崩了，本着更稳定的想法，我在AI辅助下写了python版obs控制台
