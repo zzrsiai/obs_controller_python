@@ -29,11 +29,11 @@ class LogWindow:
 
     # 日志等级 → (颜色, 前缀图标)
     LEVEL_STYLES = {
-        "INFO":    ("#cccccc", "📋"),
-        "SUCCESS": (CLR_GREEN, "✅"),
-        "WARNING": (CLR_YELLOW, "⚠️"),
-        "ERROR":   (CLR_RED,   "❌"),
-        "DEBUG":   (CLR_SUBTEXT, "🔍"),
+        "INFO":    ("#cccccc", "[INFO]"),
+        "SUCCESS": (CLR_GREEN, "[SUCCESS]"),
+        "WARNING": (CLR_YELLOW, "[WARNING]"),
+        "ERROR":   (CLR_RED,   "[ERROR]"),
+        "DEBUG":   (CLR_SUBTEXT, "[DEBUG]"),
     }
 
     def __init__(self, parent: tk.Widget, app: "OBSGui"):

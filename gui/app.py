@@ -92,7 +92,6 @@ class OBSGui:
         )
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self._build_toolbar()
         self._build_status_bar()
         self._build_main_area()
 
@@ -105,59 +104,59 @@ class OBSGui:
     # 布局构建
     # ══════════════════════════════════════════════════════════
 
-    def _build_toolbar(self) -> None:
-        """顶部连接工具栏。"""
-        bar = ttk_bs.Frame(self.root, padding=(8, 4))
+    def _build_toolbar(self, parent: tk.Widget) -> None:
+        """右上角紧凑连接工具栏（嵌入 parent）。"""
+        bar = ttk_bs.Frame(parent, padding=(4, 3))
         bar.pack(fill="x", side="top")
+
+        # 状态指示灯
+        self._led = tk.Canvas(bar, width=12, height=12,
+                              highlightthickness=0, bg="#2b2b2b")
+        self._led.pack(side="left", padx=(2, 4))
+        self._led_circle = self._led.create_oval(2, 2, 10, 10, fill=CLR_RED)
+
+        self._conn_label = ttk_bs.Label(bar, text="未连接",
+                                        bootstyle="secondary", font=FONT_LABEL)
+        self._conn_label.pack(side="left", padx=(0, 8))
+
+        ttk_bs.Separator(bar, orient="vertical").pack(side="left", fill="y", pady=2, padx=4)
 
         ttk_bs.Label(bar, text="Host:", font=FONT_LABEL).pack(side="left")
         self._host_var = tk.StringVar(value="localhost")
-        ttk_bs.Entry(bar, textvariable=self._host_var, width=14).pack(
-            side="left", padx=(4, 10)
-        )
+        ttk_bs.Entry(bar, textvariable=self._host_var, width=12,
+                     font=FONT_LABEL).pack(side="left", padx=(2, 6))
 
-        ttk_bs.Label(bar, text="Port:").pack(side="left")
+        ttk_bs.Label(bar, text="Port:", font=FONT_LABEL).pack(side="left")
         self._port_var = tk.StringVar(value="4455")
-        ttk_bs.Entry(bar, textvariable=self._port_var, width=6).pack(
-            side="left", padx=(4, 10)
-        )
+        ttk_bs.Entry(bar, textvariable=self._port_var, width=5,
+                     font=FONT_LABEL).pack(side="left", padx=(2, 6))
 
-        ttk_bs.Label(bar, text="Password:").pack(side="left")
+        ttk_bs.Label(bar, text="Pwd:", font=FONT_LABEL).pack(side="left")
         self._pwd_var = tk.StringVar()
-        ttk_bs.Entry(bar, textvariable=self._pwd_var, width=16, show="*").pack(
-            side="left", padx=(4, 10)
-        )
+        ttk_bs.Entry(bar, textvariable=self._pwd_var, width=10,
+                     show="*", font=FONT_LABEL).pack(side="left", padx=(2, 8))
 
         self._conn_btn = ttk_bs.Button(
-            bar, text="连接", bootstyle="success", width=8,
+            bar, text="连接", bootstyle="success-outline", width=5,
             command=self._on_connect,
         )
-        self._conn_btn.pack(side="left", padx=4)
+        self._conn_btn.pack(side="left", padx=2)
 
         self._disc_btn = ttk_bs.Button(
-            bar, text="断开", bootstyle="danger-outline", width=8,
+            bar, text="断开", bootstyle="danger-outline", width=5,
             command=self._on_disconnect, state="disabled",
         )
-        self._disc_btn.pack(side="left", padx=4)
-
-        # 状态指示灯（Canvas 小圆点）
-        self._led = tk.Canvas(bar, width=14, height=14,
-                              highlightthickness=0, bg="#2b2b2b")
-        self._led.pack(side="left", padx=8)
-        self._led_circle = self._led.create_oval(2, 2, 12, 12, fill=CLR_RED)
-
-        self._conn_label = ttk_bs.Label(bar, text="未连接", bootstyle="secondary")
-        self._conn_label.pack(side="left")
+        self._disc_btn.pack(side="left", padx=2)
 
     def _build_status_bar(self) -> None:
         self.status_bar = StatusBar(self.root)
 
     def _build_main_area(self) -> None:
-        """主区域：左侧预览+日志 + 右侧 Notebook。"""
+        """主区域：左侧预览+日志 + 右侧（工具栏 + Notebook + 统计面板）。"""
         paned = ttk_bs.Panedwindow(self.root, orient="horizontal")
         paned.pack(fill="both", expand=True)
 
-        # 左：预览 + 日志（垂直排列，预览撑满、日志固定高度）
+        # ── 左：预览 + 日志 ──────────────────────────────────────
         left = ttk_bs.Frame(paned)
         paned.add(left, weight=0)
 
@@ -173,12 +172,24 @@ class OBSGui:
         self.log_window = LogWindow(log_frame, self)
         self.log_window.frame.pack(fill="both", expand=True)
 
-        # 右：Notebook
+        # ── 右：工具栏 + Notebook + 统计面板 ─────────────────────
         right = ttk_bs.Frame(paned)
         paned.add(right, weight=1)
 
+        # 顶部：紧凑连接工具栏
+        toolbar_sep_frame = ttk_bs.Frame(right)
+        toolbar_sep_frame.pack(fill="x", side="top")
+        self._build_toolbar(toolbar_sep_frame)
+        ttk_bs.Separator(right, orient="horizontal").pack(fill="x", side="top")
+
+        # 底部：统计迷你面板（先 pack bottom，保证 Notebook 在中间撑满）
+        stats_frame = ttk_bs.Frame(right)
+        stats_frame.pack(fill="x", side="bottom", padx=6, pady=(2, 4))
+        ttk_bs.Separator(right, orient="horizontal").pack(fill="x", side="bottom")
+
+        # 中间：Notebook（功能标签页，不含统计）
         self.notebook = ttk_bs.Notebook(right, bootstyle="dark")
-        self.notebook.pack(fill="both", expand=True, padx=6, pady=6)
+        self.notebook.pack(fill="both", expand=True, padx=6, pady=(4, 2))
 
         self.scene_tab      = SceneTab(self.notebook, self)
         self.audio_tab      = AudioTab(self.notebook, self)
@@ -186,7 +197,9 @@ class OBSGui:
         self.transition_tab = TransitionTab(self.notebook, self)
         self.filter_tab     = FilterTab(self.notebook, self)
         self.replay_tab     = ReplayTab(self.notebook, self)
-        self.stats_tab      = StatsTab(self.notebook, self)
+
+        # 统计面板嵌入右下角（不作为 Notebook Tab）
+        self.stats_tab = StatsTab(stats_frame, self)
 
     # ══════════════════════════════════════════════════════════
     # 连接 / 断开

@@ -77,7 +77,7 @@ class SceneTab:
         right = ttk_bs.Frame(paned, padding=4)
         paned.add(right, weight=2)
 
-        ttk_bs.Label(right, text="场景项（双击所选场景）", font=FONT_BOLD).pack(anchor="w")
+        ttk_bs.Label(right, text="场景项（单击场景查看）", font=FONT_BOLD).pack(anchor="w")
 
         tree_frame = ttk_bs.Frame(right)
         tree_frame.pack(fill="both", expand=True, pady=4)
@@ -170,20 +170,20 @@ class SceneTab:
     # ── 事件回调 ──────────────────────────────────────────────
 
     def _on_scene_dbl(self, _event) -> None:
+        """双击场景：切换到该场景。"""
         self._switch_scene()
-        scene = self._selected_scene()
-        if scene:
-            self.load_items(scene)
 
     def _on_scene_select(self, _event) -> None:
-        """单击选中场景时立即显示该场景的预览截图。
+        """单击选中场景：显示预览截图 + 加载场景项列表。
         使用 after_idle 延迟，因为 <<ListboxSelect>> 在选择状态更新前触发。"""
         self.root.after_idle(self._do_scene_select)
 
     def _do_scene_select(self) -> None:
         scene = self._selected_scene()
-        if scene and self.app.ctrl:
-            self.app.preview_scene(scene)
+        if not scene or not self.app.ctrl:
+            return
+        self.app.preview_scene(scene)
+        self.load_items(scene)
 
     def _selected_scene(self) -> str | None:
         sel = self.scene_list.curselection()
