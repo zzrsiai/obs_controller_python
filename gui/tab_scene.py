@@ -1,13 +1,17 @@
 """
-gui/tab_scene.py  ——  场景管理标签页
+gui/tab_scene.py  ——  场景管理标签页（PyQt5 版）
 """
 from __future__ import annotations
-import tkinter as tk
-from tkinter import messagebox, simpledialog
+
 from typing import TYPE_CHECKING
 
-import ttkbootstrap as ttk_bs
-from ttkbootstrap.constants import *
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QListWidget, QTableWidget, QTableWidgetItem,
+    QSplitter, QListWidgetItem, QMenu, QInputDialog, QMessageBox,
+    QAbstractItemView, QLabel, QHeaderView,
+)
+from PyQt5.QtCore import Qt, QPoint
 
 from .utils import run_in_thread, FONT_BOLD
 
@@ -15,104 +19,104 @@ if TYPE_CHECKING:
     from .app import OBSGui
 
 
-class SceneTab:
-    """场景管理：左侧场景列表，右侧场景项 Treeview。"""
+class SceneTab(QWidget):
+    """场景管理：左侧场景列表，右侧场景项表格。"""
 
-    def __init__(self, notebook: ttk_bs.Notebook, app: "OBSGui"):
+    def __init__(self, parent, app: "OBSGui"):
+        super().__init__(parent)
         self.app = app
-        self.root = app.root
-        self.frame = ttk_bs.Frame(notebook, padding=8)
-        notebook.add(self.frame, text="🎬 场景")
         self._build()
 
-    # ── 构建 ─────────────────────────────────────────────────
-
     def _build(self) -> None:
-        paned = ttk_bs.Panedwindow(self.frame, orient="horizontal")
-        paned.pack(fill="both", expand=True)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
 
-        # ─ 左列：场景列表 ─
-        left = ttk_bs.Frame(paned, padding=4)
-        paned.add(left, weight=1)
+        splitter = QSplitter(Qt.Horizontal)
+        layout.addWidget(splitter)
 
-        ttk_bs.Label(left, text="场景列表", font=FONT_BOLD).pack(anchor="w")
+        # ── 左列：场景列表 ──
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(4, 4, 4, 4)
 
-        list_frame = ttk_bs.Frame(left)
-        list_frame.pack(fill="both", expand=True, pady=4)
+        left_layout.addWidget(QLabel("场景列表"))
 
-        sb = ttk_bs.Scrollbar(list_frame, orient="vertical")
-        self.scene_list = tk.Listbox(
-            list_frame,
-            yscrollcommand=sb.set,
-            selectmode="single",
-            bg="#2b2b2b", fg="#ffffff",
-            selectbackground="#375a7f",
-            font=("Segoe UI", 10),
-            relief="flat",
-            borderwidth=0,
-        )
-        sb.config(command=self.scene_list.yview)
-        sb.pack(side="right", fill="y")
-        self.scene_list.pack(fill="both", expand=True)
+        self.scene_list = QListWidget()
+        self.scene_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.scene_list.itemClicked.connect(self._on_scene_select)
+        self.scene_list.itemDoubleClicked.connect(self._on_scene_dbl)
+        self.scene_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.scene_list.customContextMenuRequested.connect(self._show_context_menu)
+        left_layout.addWidget(self.scene_list)
 
-        self.scene_list.bind("<Double-1>", self._on_scene_dbl)
-        self.scene_list.bind("<Button-3>", self._show_context_menu)
-        self.scene_list.bind("<<ListboxSelect>>", self._on_scene_select)
+        # 操作按钮
+        btn_row = QHBoxLayout()
+        btn_switch = QPushButton("切换")
+        btn_switch.clicked.connect(self._switch_scene)
+        btn_row.addWidget(btn_switch)
 
-        # 操作按钮行
-        btn_row = ttk_bs.Frame(left)
-        btn_row.pack(fill="x", pady=(4, 0))
-        ttk_bs.Button(btn_row, text="切换", bootstyle="primary",
-                      command=self._switch_scene).pack(side="left", padx=2)
-        ttk_bs.Button(btn_row, text="新建", bootstyle="success-outline",
-                      command=self._create_scene).pack(side="left", padx=2)
-        ttk_bs.Button(btn_row, text="删除", bootstyle="danger-outline",
-                      command=self._delete_scene).pack(side="left", padx=2)
-        ttk_bs.Button(btn_row, text="重命名", bootstyle="warning-outline",
-                      command=self._rename_scene).pack(side="left", padx=2)
-        ttk_bs.Button(btn_row, text="🔄", bootstyle="secondary-outline",
-                      command=self.refresh).pack(side="right", padx=2)
+        btn_create = QPushButton("新建")
+        btn_create.setProperty("success", True)
+        btn_create.clicked.connect(self._create_scene)
+        btn_row.addWidget(btn_create)
 
-        # ─ 右列：场景项列表 ─
-        right = ttk_bs.Frame(paned, padding=4)
-        paned.add(right, weight=2)
+        btn_delete = QPushButton("删除")
+        btn_delete.setProperty("danger", True)
+        btn_delete.clicked.connect(self._delete_scene)
+        btn_row.addWidget(btn_delete)
 
-        ttk_bs.Label(right, text="场景项（单击场景查看）", font=FONT_BOLD).pack(anchor="w")
+        btn_rename = QPushButton("重命名")
+        btn_rename.setProperty("warning", True)
+        btn_rename.clicked.connect(self._rename_scene)
+        btn_row.addWidget(btn_rename)
 
-        tree_frame = ttk_bs.Frame(right)
-        tree_frame.pack(fill="both", expand=True, pady=4)
+        btn_refresh = QPushButton("🔄")
+        btn_refresh.setProperty("outline", True)
+        btn_refresh.clicked.connect(self.refresh)
+        btn_row.addWidget(btn_refresh)
 
-        cols = ("名称", "类型", "启用")
-        self.item_tree = ttk_bs.Treeview(
-            tree_frame, columns=cols, show="headings", height=12,
-            bootstyle="dark"
-        )
-        for c in cols:
-            self.item_tree.heading(c, text=c)
-        self.item_tree.column("名称", width=160)
-        self.item_tree.column("类型", width=90)
-        self.item_tree.column("启用", width=60, anchor="center")
+        left_layout.addLayout(btn_row)
+        splitter.addWidget(left)
 
-        vsb = ttk_bs.Scrollbar(tree_frame, orient="vertical",
-                               command=self.item_tree.yview)
-        self.item_tree.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        self.item_tree.pack(fill="both", expand=True)
+        # ── 右列：场景项表格 ──
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(4, 4, 4, 4)
+
+        right_layout.addWidget(QLabel("场景项（单击场景查看）"))
+
+        self.item_table = QTableWidget(0, 3)
+        self.item_table.setHorizontalHeaderLabels(["名称", "类型", "启用"])
+        self.item_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.item_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.item_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.item_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.item_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        right_layout.addWidget(self.item_table)
 
         # 场景项操作
-        item_btns = ttk_bs.Frame(right)
-        item_btns.pack(fill="x", pady=(4, 0))
-        ttk_bs.Button(item_btns, text="启用/禁用", bootstyle="warning",
-                      command=self._toggle_item).pack(side="left", padx=2)
-        ttk_bs.Button(item_btns, text="删除项", bootstyle="danger-outline",
-                      command=self._delete_item).pack(side="left", padx=2)
+        item_btn_row = QHBoxLayout()
+        btn_toggle = QPushButton("启用/禁用")
+        btn_toggle.setProperty("warning", True)
+        btn_toggle.clicked.connect(self._toggle_item)
+        item_btn_row.addWidget(btn_toggle)
+
+        btn_del_item = QPushButton("删除项")
+        btn_del_item.setProperty("danger", True)
+        btn_del_item.clicked.connect(self._delete_item)
+        item_btn_row.addWidget(btn_del_item)
+
+        right_layout.addLayout(item_btn_row)
+        splitter.addWidget(right)
+
+        splitter.setSizes([300, 500])
 
         # 右键菜单
-        self._ctx_menu = tk.Menu(self.root, tearoff=0)
-        self._ctx_menu.add_command(label="切换到此场景", command=self._switch_scene)
-        self._ctx_menu.add_command(label="重命名", command=self._rename_scene)
-        self._ctx_menu.add_separator()
-        self._ctx_menu.add_command(label="删除", command=self._delete_scene)
+        self._ctx_menu = QMenu(self)
+        self._ctx_menu.addAction("切换到此场景", self._switch_scene)
+        self._ctx_menu.addAction("重命名", self._rename_scene)
+        self._ctx_menu.addSeparator()
+        self._ctx_menu.addAction("删除", self._delete_scene)
 
     # ── 刷新 ─────────────────────────────────────────────────
 
@@ -120,76 +124,61 @@ class SceneTab:
         ctrl = self.app.ctrl
         if ctrl is None:
             return
-        run_in_thread(self.root, ctrl.get_scene_names, self._on_scenes_loaded)
+        run_in_thread(ctrl.get_scene_names, self._on_scenes_loaded)
 
     def _on_scenes_loaded(self, scenes: list) -> None:
-        self.scene_list.delete(0, "end")
+        self.scene_list.clear()
         for s in scenes:
             name = s if isinstance(s, str) else s.get("sceneName", "")
-            self.scene_list.insert("end", name)
-        # 异步获取当前场景并选中（避免主线程阻塞）
+            self.scene_list.addItem(name)
         ctrl = self.app.ctrl
         if ctrl:
-            run_in_thread(
-                self.root,
-                ctrl.get_current_scene,
-                lambda cur: self._select_scene(cur),
-            )
+            run_in_thread(ctrl.get_current_scene, self._select_scene)
 
     def _select_scene(self, current: str) -> None:
-        """异步回调：在列表中高亮当前场景。"""
-        for i in range(self.scene_list.size()):
-            if self.scene_list.get(i) == current:
-                self.scene_list.selection_set(i)
-                self.scene_list.see(i)
-                break
+        items = self.scene_list.findItems(current, Qt.MatchExactly)
+        if items:
+            self.scene_list.setCurrentItem(items[0])
+            self.scene_list.scrollToItem(items[0])
 
     def load_items(self, scene_name: str) -> None:
         ctrl = self.app.ctrl
         if ctrl is None:
             return
         run_in_thread(
-            self.root,
             lambda: ctrl.get_scene_items(scene_name),
             self._on_items_loaded,
         )
 
     def _on_items_loaded(self, items: list) -> None:
-        for row in self.item_tree.get_children():
-            self.item_tree.delete(row)
+        self.item_table.setRowCount(0)
         for item in items:
             name    = item.get("source_name", "")
             kind    = item.get("source_type", "")
             enabled = "✓" if item.get("enabled", True) else "✗"
-            self.item_tree.insert(
-                "", "end",
-                iid=str(item.get("scene_item_id", "")),
-                values=(name, kind, enabled),
-            )
+            row = self.item_table.rowCount()
+            self.item_table.insertRow(row)
+            self.item_table.setItem(row, 0, QTableWidgetItem(name))
+            self.item_table.setItem(row, 1, QTableWidgetItem(kind))
+            self.item_table.setItem(row, 2, QTableWidgetItem(enabled))
+            # 存储 scene_item_id
+            self.item_table.item(row, 0).setData(Qt.UserRole, item.get("scene_item_id", ""))
 
     # ── 事件回调 ──────────────────────────────────────────────
 
-    def _on_scene_dbl(self, _event) -> None:
-        """双击场景：切换到该场景。"""
+    def _on_scene_dbl(self, _item) -> None:
         self._switch_scene()
 
-    def _on_scene_select(self, _event) -> None:
-        """单击选中场景：显示预览截图 + 加载场景项列表。
-        使用 after_idle 延迟，因为 <<ListboxSelect>> 在选择状态更新前触发。"""
-        self.root.after_idle(self._do_scene_select)
-
-    def _do_scene_select(self) -> None:
-        scene = self._selected_scene()
+    def _on_scene_select(self, item) -> None:
+        scene = item.text()
         if not scene or not self.app.ctrl:
             return
         self.app.preview_scene(scene)
         self.load_items(scene)
 
     def _selected_scene(self) -> str | None:
-        sel = self.scene_list.curselection()
-        if not sel:
-            return None
-        return self.scene_list.get(sel[0])
+        item = self.scene_list.currentItem()
+        return item.text() if item else None
 
     def _switch_scene(self) -> None:
         scene = self._selected_scene()
@@ -200,97 +189,88 @@ class SceneTab:
             return
         self.app.log(f"切换场景 → {scene}", "INFO")
         run_in_thread(
-            self.root,
             lambda: ctrl.set_current_scene(scene),
             lambda _: self.app.status_bar.set_scene(scene),
         )
 
     def _create_scene(self) -> None:
-        name = simpledialog.askstring("新建场景", "请输入场景名称：", parent=self.root)
-        if not name:
+        name, ok = QInputDialog.getText(self, "新建场景", "请输入场景名称：")
+        if not ok or not name:
             return
         ctrl = self.app.ctrl
         if ctrl is None:
             return
         self.app.log(f"创建场景: {name}", "SUCCESS")
-        run_in_thread(
-            self.root,
-            lambda: ctrl.create_scene(name),
-            lambda _: self.refresh(),
-        )
+        run_in_thread(lambda: ctrl.create_scene(name), lambda _: self.refresh())
 
     def _delete_scene(self) -> None:
         scene = self._selected_scene()
         if not scene:
             return
-        if not messagebox.askyesno("删除场景", f"确认删除场景「{scene}」？"):
+        reply = QMessageBox.question(
+            self, "删除场景", f"确认删除场景「{scene}」？",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
             return
         ctrl = self.app.ctrl
         if ctrl is None:
             return
         self.app.log(f"删除场景: {scene}", "WARNING")
-        run_in_thread(
-            self.root,
-            lambda: ctrl.remove_scene(scene),
-            lambda _: self.refresh(),
-        )
+        run_in_thread(lambda: ctrl.remove_scene(scene), lambda _: self.refresh())
 
     def _rename_scene(self) -> None:
         scene = self._selected_scene()
         if not scene:
             return
-        new_name = simpledialog.askstring(
-            "重命名场景", f"请输入「{scene}」的新名称：",
-            initialvalue=scene, parent=self.root
+        new_name, ok = QInputDialog.getText(
+            self, "重命名场景", f"请输入「{scene}」的新名称：", text=scene,
         )
-        if not new_name or new_name == scene:
+        if not ok or not new_name or new_name == scene:
             return
         ctrl = self.app.ctrl
         if ctrl is None:
             return
         self.app.log(f"重命名场景: {scene} → {new_name}", "INFO")
         run_in_thread(
-            self.root,
-            lambda: ctrl.req.set_scene_name(
-                scene_name=scene, new_scene_name=new_name
-            ),
+            lambda: ctrl.req.set_scene_name(scene_name=scene, new_scene_name=new_name),
             lambda _: self.refresh(),
         )
 
-    def _show_context_menu(self, event) -> None:
-        idx = self.scene_list.nearest(event.y)
-        self.scene_list.selection_set(idx)
-        self._ctx_menu.tk_popup(event.x_root, event.y_root)
+    def _show_context_menu(self, pos: QPoint) -> None:
+        item = self.scene_list.itemAt(pos)
+        if item:
+            self.scene_list.setCurrentItem(item)
+            self._ctx_menu.exec_(self.scene_list.mapToGlobal(pos))
 
     def _toggle_item(self) -> None:
-        sel = self.item_tree.selection()
-        if not sel:
+        row = self.item_table.currentRow()
+        if row < 0:
             return
-        item_id = int(sel[0])
+        item_id_item = self.item_table.item(row, 0)
+        item_id = int(item_id_item.data(Qt.UserRole))
         scene = self._selected_scene() or ""
         ctrl = self.app.ctrl
         if ctrl is None:
             return
-        # 读当前状态并反转
-        vals = self.item_tree.item(sel[0], "values")
-        new_enabled = (vals[2] != "✓")
+        enabled_item = self.item_table.item(row, 2)
+        new_enabled = (enabled_item.text() != "✓")
         run_in_thread(
-            self.root,
             lambda: ctrl.set_scene_item_enabled(scene, item_id, new_enabled),
             lambda _: self.load_items(scene),
         )
 
     def _delete_item(self) -> None:
-        sel = self.item_tree.selection()
-        if not sel:
+        row = self.item_table.currentRow()
+        if row < 0:
             return
-        item_id = int(sel[0])
+        item_id_item = self.item_table.item(row, 0)
+        item_id = int(item_id_item.data(Qt.UserRole))
         scene = self._selected_scene() or ""
         ctrl = self.app.ctrl
         if ctrl is None:
             return
         run_in_thread(
-            self.root,
             lambda: ctrl.remove_scene_item(scene, item_id),
             lambda _: self.load_items(scene),
         )

@@ -1,242 +1,268 @@
 """
-gui/app.py  ——  主窗口类 OBSGui
-负责：连接工具栏、主布局（左预览+右 Notebook）、状态栏、
+gui/app.py  ——  主窗口类 OBSGui（PyQt5 版）
+负责：连接工具栏、主布局（左预览+右 TabWidget）、状态栏、
       事件注册、轮询调度、全局线程安全
 """
 from __future__ import annotations
-import sys
-import tkinter as tk
-from tkinter import messagebox
+
 from typing import Optional
 
-import ttkbootstrap as ttk_bs
-from ttkbootstrap.constants import *
+from PyQt5.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QSplitter, QTabWidget, QLabel, QLineEdit,
+    QPushButton, QStatusBar, QMessageBox, QFrame,
+)
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QColor, QPalette
 
 from obs_controller import OBSController
 
-from .utils   import run_in_thread, format_timecode, FONT_LABEL, FONT_BOLD, CLR_GREEN, CLR_RED
-from .preview   import PreviewPanel
+from .utils import (
+    run_in_thread, DARK_STYLE, CLR_GREEN, CLR_RED,
+)
+from .preview import PreviewPanel
 from .log_window import LogWindow
-from .tab_scene      import SceneTab
-from .tab_audio      import AudioTab
-from .tab_record     import RecordTab
+from .tab_scene import SceneTab
+from .tab_audio import AudioTab
+from .tab_record import RecordTab
 from .tab_transition import TransitionTab
-from .tab_filter     import FilterTab
-from .tab_replay     import ReplayTab
-from .tab_stats      import StatsTab
+from .tab_filter import FilterTab
+from .tab_replay import ReplayTab
+from .tab_stats import StatsTab
 
 
-class StatusBar:
-    """底部状态栏：连接 | 当前场景 | 录制时码 | 推流时码 | FPS | CPU"""
-
-    def __init__(self, parent: tk.Widget):
-        frame = ttk_bs.Frame(parent, bootstyle="dark")
-        frame.pack(fill="x", side="bottom")
-
-        ttk_bs.Separator(parent, orient="horizontal").pack(
-            fill="x", side="bottom"
-        )
-
-        def _seg(text="", width=0, anchor="w", bootstyle="default"):
-            v = tk.StringVar(value=text)
-            lbl = ttk_bs.Label(frame, textvariable=v, width=width,
-                               anchor=anchor, font=FONT_LABEL,
-                               bootstyle=bootstyle, padding=(6, 2))
-            lbl.pack(side="left")
-            ttk_bs.Separator(frame, orient="vertical").pack(
-                side="left", fill="y", pady=2
-            )
-            return v
-
-        self._conn  = _seg("● 未连接",  18, bootstyle="danger")
-        self._scene = _seg("场景: --",   22)
-        self._rec   = _seg("REC --:--:--", 16, bootstyle="secondary")
-        self._str   = _seg("STR --:--:--", 16, bootstyle="secondary")
-        self._fps   = _seg("FPS --",     10, "center")
-        self._cpu   = _seg("CPU --%",    10, "center")
-
-    def set_connected(self, host: str, port: int) -> None:
-        self._conn.set(f"● {host}:{port}")
-
-    def set_disconnected(self) -> None:
-        self._conn.set("● 未连接")
-
-    def set_scene(self, name: str) -> None:
-        self._scene.set(f"场景: {name[:18]}")
-
-    def set_rec_tc(self, tc: str) -> None:
-        self._rec.set(f"REC {tc}")
-
-    def set_stream_tc(self, tc: str) -> None:
-        self._str.set(f"STR {tc}")
-
-    def set_fps(self, fps: float) -> None:
-        self._fps.set(f"FPS {fps:.1f}")
-
-    def set_cpu(self, cpu: float) -> None:
-        self._cpu.set(f"CPU {cpu:.0f}%")
-
-
-class OBSGui:
+class OBSGui(QMainWindow):
     """OBS 全功能控制台主窗口。"""
 
     def __init__(self):
+        super().__init__()
         self.ctrl: Optional[OBSController] = None
 
-        # ── 主窗口 ──
-        self.root = ttk_bs.Window(
-            title="OBS 全功能控制台",
-            themename="darkly",
-            size=(1280, 760),
-            minsize=(960, 600),
-        )
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.setWindowTitle("OBS 全功能控制台")
+        self.setMinimumSize(960, 600)
+        self.resize(1280, 760)
+        self.setStyleSheet(DARK_STYLE)
 
         self._build_status_bar()
         self._build_main_area()
 
-        # 轮询 after-id 集合
-        self._after_stats   : str | None = None
-        self._after_timecode: str | None = None
-        self._after_heartbeat: str | None = None
+        # 轮询定时器
+        self._timer_stats = QTimer(self)
+        self._timer_stats.timeout.connect(self._poll_stats)
+        self._timer_timecode = QTimer(self)
+        self._timer_timecode.timeout.connect(self._poll_timecode)
+        self._timer_heartbeat = QTimer(self)
+        self._timer_heartbeat.timeout.connect(self._poll_heartbeat)
 
     # ══════════════════════════════════════════════════════════
     # 布局构建
     # ══════════════════════════════════════════════════════════
 
-    def _build_toolbar(self, parent: tk.Widget) -> None:
-        """右上角紧凑连接工具栏（嵌入 parent）。"""
-        bar = ttk_bs.Frame(parent, padding=(4, 3))
-        bar.pack(fill="x", side="top")
+    def _build_toolbar(self) -> QWidget:
+        """连接工具栏。"""
+        bar = QWidget()
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(4, 3, 4, 3)
 
         # 状态指示灯
-        self._led = tk.Canvas(bar, width=12, height=12,
-                              highlightthickness=0, bg="#2b2b2b")
-        self._led.pack(side="left", padx=(2, 4))
-        self._led_circle = self._led.create_oval(2, 2, 10, 10, fill=CLR_RED)
+        self._led = QLabel("●")
+        self._led.setStyleSheet(f"color: {CLR_RED}; font-size: 14pt;")
+        layout.addWidget(self._led)
 
-        self._conn_label = ttk_bs.Label(bar, text="未连接",
-                                        bootstyle="secondary", font=FONT_LABEL)
-        self._conn_label.pack(side="left", padx=(0, 8))
+        self._conn_label = QLabel("未连接")
+        self._conn_label.setStyleSheet("color: #aaaaaa;")
+        layout.addWidget(self._conn_label)
 
-        ttk_bs.Separator(bar, orient="vertical").pack(side="left", fill="y", pady=2, padx=4)
+        # 分隔线
+        sep = QFrame()
+        sep.setFrameShape(QFrame.VLine)
+        sep.setStyleSheet("color: #444444;")
+        layout.addWidget(sep)
 
-        ttk_bs.Label(bar, text="Host:", font=FONT_LABEL).pack(side="left")
-        self._host_var = tk.StringVar(value="localhost")
-        ttk_bs.Entry(bar, textvariable=self._host_var, width=12,
-                     font=FONT_LABEL).pack(side="left", padx=(2, 6))
+        layout.addWidget(QLabel("Host:"))
+        self._host_edit = QLineEdit("localhost")
+        self._host_edit.setFixedWidth(100)
+        layout.addWidget(self._host_edit)
 
-        ttk_bs.Label(bar, text="Port:", font=FONT_LABEL).pack(side="left")
-        self._port_var = tk.StringVar(value="4455")
-        ttk_bs.Entry(bar, textvariable=self._port_var, width=5,
-                     font=FONT_LABEL).pack(side="left", padx=(2, 6))
+        layout.addWidget(QLabel("Port:"))
+        self._port_edit = QLineEdit("4455")
+        self._port_edit.setFixedWidth(50)
+        layout.addWidget(self._port_edit)
 
-        ttk_bs.Label(bar, text="Pwd:", font=FONT_LABEL).pack(side="left")
-        self._pwd_var = tk.StringVar()
-        ttk_bs.Entry(bar, textvariable=self._pwd_var, width=10,
-                     show="*", font=FONT_LABEL).pack(side="left", padx=(2, 8))
+        layout.addWidget(QLabel("Pwd:"))
+        self._pwd_edit = QLineEdit()
+        self._pwd_edit.setFixedWidth(90)
+        self._pwd_edit.setEchoMode(QLineEdit.Password)
+        layout.addWidget(self._pwd_edit)
 
-        self._conn_btn = ttk_bs.Button(
-            bar, text="连接", bootstyle="success-outline", width=5,
-            command=self._on_connect,
-        )
-        self._conn_btn.pack(side="left", padx=2)
+        self._conn_btn = QPushButton("连接")
+        self._conn_btn.setProperty("success", True)
+        self._conn_btn.setFixedWidth(60)
+        self._conn_btn.clicked.connect(self._on_connect)
+        layout.addWidget(self._conn_btn)
 
-        self._disc_btn = ttk_bs.Button(
-            bar, text="断开", bootstyle="danger-outline", width=5,
-            command=self._on_disconnect, state="disabled",
-        )
-        self._disc_btn.pack(side="left", padx=2)
+        self._disc_btn = QPushButton("断开")
+        self._disc_btn.setProperty("danger", True)
+        self._disc_btn.setFixedWidth(60)
+        self._disc_btn.setEnabled(False)
+        self._disc_btn.clicked.connect(self._on_disconnect)
+        layout.addWidget(self._disc_btn)
+
+        layout.addStretch()
+        return bar
 
     def _build_status_bar(self) -> None:
-        self.status_bar = StatusBar(self.root)
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+
+        self._sb_conn = QLabel("● 未连接")
+        self._sb_conn.setStyleSheet(f"color: {CLR_RED};")
+        self.status_bar.addWidget(self._sb_conn)
+
+        self._sb_scene = QLabel("场景: --")
+        self.status_bar.addWidget(self._sb_scene)
+
+        self._sb_rec = QLabel("REC --:--:--")
+        self.status_bar.addWidget(self._sb_rec)
+
+        self._sb_str = QLabel("STR --:--:--")
+        self.status_bar.addWidget(self._sb_str)
+
+        self._sb_fps = QLabel("FPS --")
+        self.status_bar.addPermanentWidget(self._sb_fps)
+
+        self._sb_cpu = QLabel("CPU --%")
+        self.status_bar.addPermanentWidget(self._sb_cpu)
 
     def _build_main_area(self) -> None:
-        """主区域：左侧预览+日志 + 右侧（工具栏 + Notebook + 统计面板）。"""
-        paned = ttk_bs.Panedwindow(self.root, orient="horizontal")
-        paned.pack(fill="both", expand=True)
+        central = QWidget()
+        self.setCentralWidget(central)
 
-        # ── 左：预览 + 日志 ──────────────────────────────────────
-        left = ttk_bs.Frame(paned)
-        paned.add(left, weight=0)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # 上部：预览监视器（尽可能撑满）
-        preview_frame = ttk_bs.Frame(left)
-        preview_frame.pack(side="top", fill="both", expand=True,
-                         padx=6, pady=(6, 2))
-        self.preview_panel = PreviewPanel(preview_frame, self)
+        # 工具栏
+        main_layout.addWidget(self._build_toolbar())
 
-        # 下部：日志窗口（固定高度 150px）
-        log_frame = ttk_bs.Frame(left)
-        log_frame.pack(side="bottom", fill="x", padx=6, pady=(2, 6))
-        self.log_window = LogWindow(log_frame, self)
-        self.log_window.frame.pack(fill="both", expand=True)
+        # 分隔线
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color: #444444;")
+        main_layout.addWidget(sep)
 
-        # ── 右：工具栏 + Notebook + 统计面板 ─────────────────────
-        right = ttk_bs.Frame(paned)
-        paned.add(right, weight=1)
+        # 主分割器
+        splitter = QSplitter(Qt.Horizontal)
+        main_layout.addWidget(splitter)
 
-        # 顶部：紧凑连接工具栏
-        toolbar_sep_frame = ttk_bs.Frame(right)
-        toolbar_sep_frame.pack(fill="x", side="top")
-        self._build_toolbar(toolbar_sep_frame)
-        ttk_bs.Separator(right, orient="horizontal").pack(fill="x", side="top")
+        # ── 左：预览 + 日志 ──
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(6, 6, 3, 6)
 
-        # 底部：统计迷你面板（先 pack bottom，保证 Notebook 在中间撑满）
-        stats_frame = ttk_bs.Frame(right)
-        stats_frame.pack(fill="x", side="bottom", padx=6, pady=(2, 4))
-        ttk_bs.Separator(right, orient="horizontal").pack(fill="x", side="bottom")
+        self.preview_panel = PreviewPanel(left, self)
+        left_layout.addWidget(self.preview_panel, stretch=1)
 
-        # 中间：Notebook（功能标签页，不含统计）
-        self.notebook = ttk_bs.Notebook(right, bootstyle="dark")
-        self.notebook.pack(fill="both", expand=True, padx=6, pady=(4, 2))
+        self.log_window = LogWindow(left, self)
+        left_layout.addWidget(self.log_window)
 
-        self.scene_tab      = SceneTab(self.notebook, self)
-        self.audio_tab      = AudioTab(self.notebook, self)
-        self.record_tab     = RecordTab(self.notebook, self)
-        self.transition_tab = TransitionTab(self.notebook, self)
-        self.filter_tab     = FilterTab(self.notebook, self)
-        self.replay_tab     = ReplayTab(self.notebook, self)
+        splitter.addWidget(left)
 
-        # 统计面板嵌入右下角（不作为 Notebook Tab）
-        self.stats_tab = StatsTab(stats_frame, self)
+        # ── 右：TabWidget + 统计面板 ──
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(3, 6, 6, 6)
+
+        # TabWidget
+        self.tab_widget = QTabWidget()
+        right_layout.addWidget(self.tab_widget, stretch=1)
+
+        self.scene_tab = SceneTab(self.tab_widget, self)
+        self.tab_widget.addTab(self.scene_tab, "🎬 场景")
+
+        self.audio_tab = AudioTab(self.tab_widget, self)
+        self.tab_widget.addTab(self.audio_tab, "🎚 音频")
+
+        self.record_tab = RecordTab(self.tab_widget, self)
+        self.tab_widget.addTab(self.record_tab, "⏺ 录制/推流")
+
+        self.transition_tab = TransitionTab(self.tab_widget, self)
+        self.tab_widget.addTab(self.transition_tab, "🎞 转场")
+
+        self.filter_tab = FilterTab(self.tab_widget, self)
+        self.tab_widget.addTab(self.filter_tab, "✨ 滤镜")
+
+        self.replay_tab = ReplayTab(self.tab_widget, self)
+        self.tab_widget.addTab(self.replay_tab, "📼 回放/截图")
+
+        # 统计面板
+        self.stats_tab = StatsTab(right, self)
+        right_layout.addWidget(self.stats_tab)
+
+        splitter.addWidget(right)
+        splitter.setSizes([500, 780])
+
+    # ══════════════════════════════════════════════════════════
+    # 状态栏方法
+    # ══════════════════════════════════════════════════════════
+
+    def set_connected(self, host: str, port: int) -> None:
+        self._sb_conn.setText(f"● {host}:{port}")
+        self._sb_conn.setStyleSheet(f"color: {CLR_GREEN};")
+
+    def set_disconnected(self) -> None:
+        self._sb_conn.setText("● 未连接")
+        self._sb_conn.setStyleSheet(f"color: {CLR_RED};")
+
+    def set_scene(self, name: str) -> None:
+        self._sb_scene.setText(f"场景: {name[:18]}")
+
+    def set_rec_tc(self, tc: str) -> None:
+        self._sb_rec.setText(f"REC {tc}")
+
+    def set_stream_tc(self, tc: str) -> None:
+        self._sb_str.setText(f"STR {tc}")
+
+    def set_fps(self, fps: float) -> None:
+        self._sb_fps.setText(f"FPS {fps:.1f}")
+
+    def set_cpu(self, cpu: float) -> None:
+        self._sb_cpu.setText(f"CPU {cpu:.0f}%")
 
     # ══════════════════════════════════════════════════════════
     # 连接 / 断开
     # ══════════════════════════════════════════════════════════
 
     def _on_connect(self) -> None:
-        host = self._host_var.get().strip() or "localhost"
+        host = self._host_edit.text().strip() or "localhost"
         try:
-            port = int(self._port_var.get().strip())
+            port = int(self._port_edit.text().strip())
         except ValueError:
             port = 4455
-        pwd = self._pwd_var.get().strip() or None
+        pwd = self._pwd_edit.text().strip() or None
 
-        self._conn_label.config(text="连接中…")
-        self._conn_btn.config(state="disabled")
+        self._conn_label.setText("连接中…")
+        self._conn_btn.setEnabled(False)
 
         def do_connect():
-            # OBSController.__init__ 在创建时自动建立连接（ReqClient 构造即连接）
             pwd_str = pwd if pwd else ""
             ctrl = OBSController(host=host, port=port, password=pwd_str)
-            # 尝试调用一个简单请求验证连接是否成功
             ctrl.get_version()
             return ctrl
 
         run_in_thread(
-            self.root, do_connect,
-            ok_cb=lambda ctrl: self._after_connect(ctrl, host, port),
-            err_cb=self._on_connect_error,
+            do_connect,
+            lambda ctrl: self._after_connect(ctrl, host, port),
+            self._on_connect_error,
         )
 
     def _after_connect(self, ctrl: OBSController, host: str, port: int) -> None:
         self.ctrl = ctrl
-        self._conn_btn.config(state="disabled")
-        self._disc_btn.config(state="normal")
-        self._conn_label.config(text=f"已连接 {host}:{port}")
-        self._led.itemconfig(self._led_circle, fill=CLR_GREEN)
-        self.status_bar.set_connected(host, port)
+        self._conn_btn.setEnabled(False)
+        self._disc_btn.setEnabled(True)
+        self._conn_label.setText(f"已连接 {host}:{port}")
+        self._conn_label.setStyleSheet("color: #00bc8c;")
+        self._led.setStyleSheet(f"color: {CLR_GREEN}; font-size: 14pt;")
+        self.set_connected(host, port)
 
         self.log(f"已连接到 OBS {host}:{port}", "SUCCESS")
 
@@ -253,10 +279,11 @@ class OBSGui:
         self._start_polls()
 
     def _on_connect_error(self, exc: Exception) -> None:
-        self._conn_btn.config(state="normal")
-        self._conn_label.config(text="连接失败")
+        self._conn_btn.setEnabled(True)
+        self._conn_label.setText("连接失败")
+        self._conn_label.setStyleSheet("color: #e74c3c;")
         self.log(f"连接失败: {exc}", "ERROR")
-        messagebox.showerror("连接失败", str(exc))
+        QMessageBox.critical(self, "连接失败", str(exc))
 
     def _on_disconnect(self) -> None:
         self._stop_polls()
@@ -269,11 +296,12 @@ class OBSGui:
                 pass
             self.ctrl = None
 
-        self._conn_btn.config(state="normal")
-        self._disc_btn.config(state="disabled")
-        self._conn_label.config(text="未连接")
-        self._led.itemconfig(self._led_circle, fill=CLR_RED)
-        self.status_bar.set_disconnected()
+        self._conn_btn.setEnabled(True)
+        self._disc_btn.setEnabled(False)
+        self._conn_label.setText("未连接")
+        self._conn_label.setStyleSheet("color: #aaaaaa;")
+        self._led.setStyleSheet(f"color: {CLR_RED}; font-size: 14pt;")
+        self.set_disconnected()
         self.log("已断开 OBS 连接", "WARNING")
 
     # ══════════════════════════════════════════════════════════
@@ -288,52 +316,49 @@ class OBSGui:
             name = (data.get("sceneName") if isinstance(data, dict)
                     else getattr(data, "scene_name", ""))
             if name:
-                self.root.after(0, lambda: self.status_bar.set_scene(name))
-                self.root.after(0, lambda: self.scene_tab.refresh())
+                self.set_scene(name)
+                self.scene_tab.refresh()
 
         def on_scene_created(data):
-            # 场景创建后立即刷新列表（无论来自 GUI 还是 OBS 直接操作）
-            self.root.after(0, self.scene_tab.refresh)
+            self.scene_tab.refresh()
 
         def on_scene_removed(data):
-            # 场景删除后立即刷新列表
-            self.root.after(0, self.scene_tab.refresh)
+            self.scene_tab.refresh()
 
         def on_scene_name_changed(data):
-            # 场景重命名后立即刷新列表
-            self.root.after(0, self.scene_tab.refresh)
+            self.scene_tab.refresh()
 
         def on_record_state(data):
             state = (data.get("outputState") if isinstance(data, dict)
                      else getattr(data, "output_state", ""))
-            active  = "STARTED" in state.upper()
-            paused  = "PAUSED"  in state.upper()
-            self.root.after(0, lambda: self.record_tab.set_recording_state(active, paused))
+            active = "STARTED" in state.upper()
+            paused = "PAUSED" in state.upper()
+            self.record_tab.set_recording_state(active, paused)
 
         def on_stream_state(data):
             state = (data.get("outputState") if isinstance(data, dict)
                      else getattr(data, "output_state", ""))
             active = "STARTED" in state.upper()
-            self.root.after(0, lambda: self.record_tab.set_streaming_state(active))
+            self.record_tab.set_streaming_state(active)
 
         def on_input_mute(data):
-            name   = (data.get("inputName") if isinstance(data, dict)
-                      else getattr(data, "input_name", ""))
-            muted  = (data.get("inputMuted") if isinstance(data, dict)
-                      else getattr(data, "input_muted", False))
+            name = (data.get("inputName") if isinstance(data, dict)
+                    else getattr(data, "input_name", ""))
+            muted = (data.get("inputMuted") if isinstance(data, dict)
+                     else getattr(data, "input_muted", False))
             if name:
-                self.root.after(0, lambda: self.audio_tab.update_mute(name, muted))
+                self.audio_tab.update_mute(name, muted)
 
         try:
             self.ctrl.register_callback("CurrentProgramSceneChanged", on_scene_changed)
-            self.ctrl.register_callback("SceneCreated",               on_scene_created)
-            self.ctrl.register_callback("SceneRemoved",               on_scene_removed)
-            self.ctrl.register_callback("SceneNameChanged",           on_scene_name_changed)
-            self.ctrl.register_callback("RecordStateChanged",         on_record_state)
-            self.ctrl.register_callback("StreamStateChanged",         on_stream_state)
-            self.ctrl.register_callback("InputMuteStateChanged",      on_input_mute)
+            self.ctrl.register_callback("SceneCreated", on_scene_created)
+            self.ctrl.register_callback("SceneRemoved", on_scene_removed)
+            self.ctrl.register_callback("SceneNameChanged", on_scene_name_changed)
+            self.ctrl.register_callback("RecordStateChanged", on_record_state)
+            self.ctrl.register_callback("StreamStateChanged", on_stream_state)
+            self.ctrl.register_callback("InputMuteStateChanged", on_input_mute)
         except Exception:
-            pass  # 部分版本 API 不支持
+            pass
 
     # ══════════════════════════════════════════════════════════
     # 轮询
@@ -343,13 +368,14 @@ class OBSGui:
         self._poll_stats()
         self._poll_timecode()
         self._poll_heartbeat()
+        self._timer_stats.start(2000)
+        self._timer_timecode.start(1000)
+        self._timer_heartbeat.start(5000)
 
     def _stop_polls(self) -> None:
-        for attr in ("_after_stats", "_after_timecode", "_after_heartbeat"):
-            aid = getattr(self, attr, None)
-            if aid:
-                self.root.after_cancel(aid)
-                setattr(self, attr, None)
+        self._timer_stats.stop()
+        self._timer_timecode.stop()
+        self._timer_heartbeat.stop()
 
     def _poll_stats(self) -> None:
         if self.ctrl is None:
@@ -367,22 +393,21 @@ class OBSGui:
                 return None
 
             fps = _g(stats, "activeFps", "active_fps")
-            cpu = _g(stats, "cpuUsage",  "cpu_usage")
+            cpu = _g(stats, "cpuUsage", "cpu_usage")
             if fps is not None:
-                self.status_bar.set_fps(fps)
+                self.set_fps(fps)
             if cpu is not None:
-                self.status_bar.set_cpu(cpu)
+                self.set_cpu(cpu)
             self.stats_tab._on_stats(stats)
 
-        run_in_thread(self.root, fetch, update)
-        self._after_stats = self.root.after(2000, self._poll_stats)
+        run_in_thread(fetch, update)
 
     def _poll_timecode(self) -> None:
         if self.ctrl is None:
             return
 
         def fetch():
-            rec_tc    = ""
+            rec_tc = ""
             stream_tc = ""
             try:
                 r = self.ctrl.get_record_status()
@@ -403,14 +428,13 @@ class OBSGui:
         def update(pair):
             rec_tc, stream_tc = pair
             if rec_tc:
-                self.status_bar.set_rec_tc(rec_tc)
+                self.set_rec_tc(rec_tc)
                 self.record_tab.update_rec_timecode(rec_tc)
             if stream_tc:
-                self.status_bar.set_stream_tc(stream_tc)
+                self.set_stream_tc(stream_tc)
                 self.record_tab.update_stream_timecode(stream_tc)
 
-        run_in_thread(self.root, fetch, update)
-        self._after_timecode = self.root.after(1000, self._poll_timecode)
+        run_in_thread(fetch, update)
 
     def _poll_heartbeat(self) -> None:
         if self.ctrl is None:
@@ -425,18 +449,16 @@ class OBSGui:
 
         def on_result(ok: bool):
             if not ok:
-                self._led.itemconfig(self._led_circle, fill="#888888")
+                self._led.setStyleSheet("color: #888888; font-size: 14pt;")
                 self.log("心跳检测失败，OBS 可能已断开", "WARNING")
 
-        run_in_thread(self.root, check, on_result)
-        self._after_heartbeat = self.root.after(5000, self._poll_heartbeat)
+        run_in_thread(check, on_result)
 
     # ══════════════════════════════════════════════════════════
     # 全局刷新
     # ══════════════════════════════════════════════════════════
 
     def refresh_all(self) -> None:
-        """连接后刷新所有标签页数据。"""
         self.scene_tab.refresh()
         self.audio_tab.refresh()
         self.transition_tab.refresh()
@@ -444,36 +466,33 @@ class OBSGui:
         self.replay_tab.refresh()
         self.stats_tab.refresh()
 
-        # 更新当前场景
         run_in_thread(
-            self.root,
             self.ctrl.get_current_scene,
-            lambda s: self.status_bar.set_scene(s),
+            lambda s: self.set_scene(s),
         )
 
     # ══════════════════════════════════════════════════════════
-    # 预览面板回调（供 PreviewPanel 调用）
+    # 预览面板回调
     # ══════════════════════════════════════════════════════════
 
     def do_cut(self) -> None:
         if self.ctrl is None:
             return
-        run_in_thread(self.root, self.ctrl.trigger_studio_mode_transition)
+        run_in_thread(self.ctrl.trigger_studio_mode_transition)
 
     def do_fade(self) -> None:
         if self.ctrl is None:
             return
-        run_in_thread(
-            self.root,
-            lambda: (self.ctrl.set_current_transition("Fade"),
-                     self.ctrl.set_transition_duration(500)),
-            lambda _: run_in_thread(
-                self.root, self.ctrl.trigger_studio_mode_transition
-            ),
-        )
+        ctrl = self.ctrl
+
+        def do_fade_inner():
+            ctrl.set_current_transition("Fade")
+            ctrl.set_transition_duration(500)
+            ctrl.trigger_studio_mode_transition()
+
+        run_in_thread(do_fade_inner)
 
     def do_fade_to_black(self) -> None:
-        """淡出到黑场 / 从黑场恢复（toggle 式）。"""
         if self.ctrl is None:
             return
         ctrl = self.ctrl
@@ -498,29 +517,20 @@ class OBSGui:
         def on_error(exc):
             self.log(f"黑场切换失败: {exc}", "ERROR")
 
-        run_in_thread(self.root, toggle, update, err_cb=on_error)
+        run_in_thread(toggle, update, on_error)
 
     def preview_scene(self, scene_name: str) -> None:
-        """场景列表选中时，在 PREVIEW 画布上显示该场景的截图（不切换节目场景）。"""
         if self.ctrl is None:
             return
         self.preview_panel.preview_one_shot(scene_name)
 
     def log(self, message: str, level: str = "INFO") -> None:
-        """写入左下角日志窗口（线程安全）。"""
         self.log_window.log(message, level)
 
     # ══════════════════════════════════════════════════════════
     # 关闭处理
     # ══════════════════════════════════════════════════════════
 
-    def _on_close(self) -> None:
+    def closeEvent(self, event) -> None:
         self._on_disconnect()
-        self.root.destroy()
-
-    # ══════════════════════════════════════════════════════════
-    # 启动
-    # ══════════════════════════════════════════════════════════
-
-    def run(self) -> None:
-        self.root.mainloop()
+        event.accept()

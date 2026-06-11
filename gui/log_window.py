@@ -1,33 +1,29 @@
 """
-gui/log_window.py  ——  左下角日志输出窗口
-支持分级彩色日志、时间戳、自动滚动、线程安全写入
+gui/log_window.py  ——  左下角日志输出窗口（PyQt5 版）
+支持分级彩色日志、时间戳、自动滚动
 """
 from __future__ import annotations
-import tkinter as tk
-from tkinter import ttk
+
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-import ttkbootstrap as ttk_bs
+from PyQt5.QtWidgets import (
+    QGroupBox, QTextEdit, QVBoxLayout,
+)
+from PyQt5.QtGui import QTextCharFormat, QColor, QFont
+from PyQt5.QtCore import Qt
 
-from .utils import FONT_MONO, CLR_GREEN, CLR_RED, CLR_YELLOW, CLR_SUBTEXT
+from .utils import CLR_GREEN, CLR_RED, CLR_YELLOW, CLR_SUBTEXT
 
 if TYPE_CHECKING:
     from .app import OBSGui
 
 
-class LogWindow:
-    """左下角日志输出面板。
+class LogWindow(QGroupBox):
+    """左下角日志输出面板。"""
 
-    使用方式:
-        app.log("场景已切换", "INFO")
-        app.log("连接失败: timeout", "ERROR")
-        app.log("录制已开始", "SUCCESS")
-    """
+    MAX_LINES = 500
 
-    MAX_LINES = 500  # 超过后裁剪前一半
-
-    # 日志等级 → (颜色, 前缀图标)
     LEVEL_STYLES = {
         "INFO":    ("#cccccc", "[INFO]"),
         "SUCCESS": (CLR_GREEN, "[SUCCESS]"),
@@ -36,91 +32,68 @@ class LogWindow:
         "DEBUG":   (CLR_SUBTEXT, "[DEBUG]"),
     }
 
-    def __init__(self, parent: tk.Widget, app: "OBSGui"):
+    def __init__(self, parent, app: "OBSGui"):
+        super().__init__(" 📜 日志输出 ", parent)
         self.app = app
-        self.root = app.root
-
-        # 外框
-        self.frame = ttk_bs.Labelframe(parent, text=" 📜 日志输出 ", padding=(2, 2))
-        # 不在 __init__ 中 pack，由调用方决定布局
-
-        # 容器
-        container = ttk_bs.Frame(self.frame)
-        container.pack(fill="both", expand=True)
-
-        # 文本区 + 滚动条
-        self._text = tk.Text(
-            container,
-            wrap="word",
-            font=FONT_MONO,
-            bg="#1a1a1a",
-            fg="#cccccc",
-            insertbackground="#cccccc",
-            relief="flat",
-            borderwidth=0,
-            padx=6, pady=4,
-            state="disabled",
-            highlightthickness=0,
-        )
-        scrollbar = ttk.Scrollbar(container, orient="vertical", command=self._text.yview)
-        self._text.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
-        self._text.pack(side="left", fill="both", expand=True)
-
-        # 配置颜色标签
-        for level, (color, _) in self.LEVEL_STYLES.items():
-            self._text.tag_configure(level, foreground=color)
-        self._text.tag_configure("timestamp", foreground="#888888")
-
         self._line_count = 0
 
-    # ── 公开方法 ────────────────────────────────────────────
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(2, 2, 2, 2)
+
+        self._text = QTextEdit()
+        self._text.setReadOnly(True)
+        self._text.setFont(QFont("Consolas", 9))
+        self._text.setStyleSheet("QTextEdit { background-color: #1a1a1a; color: #cccccc; border: none; }")
+        layout.addWidget(self._text)
+
+        # 预定义颜色格式
+        self._formats = {}
+        for level, (color, _) in self.LEVEL_STYLES.items():
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(color))
+            self._formats[level] = fmt
+
+        self._ts_fmt = QTextCharFormat()
+        self._ts_fmt.setForeground(QColor("#888888"))
 
     def log(self, message: str, level: str = "INFO") -> None:
-        """线程安全地写入一条日志。可从任意线程调用。"""
-        self.root.after(0, lambda: self._write(message, level))
+        """线程安全写入日志（PyQt5 信号机制已在主线程，但保留接口）。"""
+        self._write(message, level)
 
     def clear(self) -> None:
-        """清空所有日志。"""
-        self.root.after(0, self._clear)
-
-    # ── 内部实现 ────────────────────────────────────────────
+        self._text.clear()
+        self._line_count = 0
 
     def _write(self, message: str, level: str) -> None:
         now = datetime.now().strftime("%H:%M:%S")
-        style = self.LEVEL_STYLES.get(level.upper(), self.LEVEL_STYLES["INFO"])
-        color_tag = level.upper() if level.upper() in self.LEVEL_STYLES else "INFO"
+        level_key = level.upper()
+        if level_key not in self.LEVEL_STYLES:
+            level_key = "INFO"
+        style = self.LEVEL_STYLES[level_key]
         icon = style[1]
 
-        self._text.configure(state="normal")
+        cursor = self._text.textCursor()
+        cursor.movePosition(cursor.End)
 
         # 时间戳
-        self._text.insert("end", f"[{now}] ", "timestamp")
-        # 等级图标 + 内容
-        self._text.insert("end", f"{icon} {message}\n", color_tag)
+        cursor.insertText(f"[{now}] ", self._ts_fmt)
+        # 等级 + 内容
+        cursor.insertText(f"{icon} {message}\n", self._formats.get(level_key, self._formats["INFO"]))
 
-        self._text.configure(state="disabled")
-        self._text.see("end")
+        self._text.setTextCursor(cursor)
+        self._text.ensureCursorVisible()
 
         self._line_count += 1
         self._trim_if_needed()
 
-    def _clear(self) -> None:
-        self._text.configure(state="normal")
-        self._text.delete("1.0", "end")
-        self._text.configure(state="disabled")
-        self._line_count = 0
-
     def _trim_if_needed(self) -> None:
-        """日志行数超过上限时，删除前半部分。"""
         if self._line_count <= self.MAX_LINES:
             return
-        # 保留后一半
+        cursor = self._text.textCursor()
+        cursor.movePosition(cursor.Start)
         keep = self.MAX_LINES // 2
-        self._text.configure(state="normal")
-        # 数 keep 行从末尾往前
-        last = int(self._text.index("end-1c").split(".")[0])
-        if last > keep:
-            self._text.delete("1.0", f"{last - keep + 1}.0")
-        self._text.configure(state="disabled")
+        # 移动到要保留的行
+        for _ in range(self._line_count - keep):
+            cursor.movePosition(cursor.Down, cursor.KeepAnchor)
+        cursor.removeSelectedText()
         self._line_count = keep

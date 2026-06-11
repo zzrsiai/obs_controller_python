@@ -1,14 +1,18 @@
 """
-gui/tab_replay.py  ——  回放缓冲 + 截图标签页
+gui/tab_replay.py  ——  回放缓冲 + 截图标签页（PyQt5 版）
 """
 from __future__ import annotations
+
 import io
 import base64
-import tkinter as tk
 from typing import TYPE_CHECKING
 
-import ttkbootstrap as ttk_bs
-from PIL import Image, ImageTk
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QLabel, QComboBox, QSlider, QGroupBox,
+)
+from PyQt5.QtGui import QPixmap, QImage
+from PyQt5.QtCore import Qt
 
 from .utils import run_in_thread, FONT_BOLD, FONT_LABEL
 
@@ -16,102 +20,106 @@ if TYPE_CHECKING:
     from .app import OBSGui
 
 
-THUMB_W, THUMB_H = 256, 144   # 截图缩略图尺寸
+THUMB_W, THUMB_H = 256, 144
 
 
-class ReplayTab:
+class ReplayTab(QWidget):
     """回放缓冲控制 + 截图功能。"""
 
-    def __init__(self, notebook: ttk_bs.Notebook, app: "OBSGui"):
+    def __init__(self, parent, app: "OBSGui"):
+        super().__init__(parent)
         self.app = app
-        self.root = app.root
-        self._replay_on   = False
-        self._thumb_photo: ImageTk.PhotoImage | None = None
-
-        self.frame = ttk_bs.Frame(notebook, padding=10)
-        notebook.add(self.frame, text="📼 回放/截图")
+        self._replay_on = False
         self._build()
 
-    # ── 构建 ─────────────────────────────────────────────────
-
     def _build(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+
         # ── 回放缓冲 ──
-        buf_lf = ttk_bs.Labelframe(self.frame, text=" 📼 回放缓冲 ")
-        buf_lf.pack(fill="x", pady=(0, 10))
+        buf_group = QGroupBox(" 📼 回放缓冲 ")
+        buf_layout = QVBoxLayout(buf_group)
 
-        b1 = ttk_bs.Frame(buf_lf)
-        b1.pack(fill="x")
-        self._buf_btn = ttk_bs.Button(
-            b1, text="▶ 启动缓冲", bootstyle="success", width=14,
-            command=self._toggle_replay,
-        )
-        self._buf_btn.pack(side="left", padx=(0, 8))
+        b1 = QHBoxLayout()
+        self._buf_btn = QPushButton("▶ 启动缓冲")
+        self._buf_btn.setProperty("success", True)
+        self._buf_btn.setFixedWidth(130)
+        self._buf_btn.clicked.connect(self._toggle_replay)
+        b1.addWidget(self._buf_btn)
 
-        ttk_bs.Button(
-            b1, text="💾 保存回放", bootstyle="primary-outline", width=14,
-            command=self._save_replay,
-        ).pack(side="left")
+        btn_save = QPushButton("💾 保存回放")
+        btn_save.setProperty("outline", True)
+        btn_save.setFixedWidth(130)
+        btn_save.clicked.connect(self._save_replay)
+        b1.addWidget(btn_save)
+        b1.addStretch()
+        buf_layout.addLayout(b1)
 
-        b2 = ttk_bs.Frame(buf_lf)
-        b2.pack(fill="x", pady=(6, 0))
-        ttk_bs.Label(b2, text="最近保存:").pack(side="left")
-        self._saved_path_var = tk.StringVar(value="（未保存）")
-        ttk_bs.Label(b2, textvariable=self._saved_path_var,
-                     bootstyle="info", font=FONT_LABEL).pack(side="left", padx=6)
+        b2 = QHBoxLayout()
+        b2.addWidget(QLabel("最近保存:"))
+        self._saved_path_label = QLabel("（未保存）")
+        self._saved_path_label.setStyleSheet("color: #375a7f;")
+        b2.addWidget(self._saved_path_label)
+        b2.addStretch()
+        buf_layout.addLayout(b2)
+
+        layout.addWidget(buf_group)
 
         # ── 截图 ──
-        shot_lf = ttk_bs.Labelframe(self.frame, text=" 📷 截图 ")
-        shot_lf.pack(fill="x")
+        shot_group = QGroupBox(" 📷 截图 ")
+        shot_layout = QVBoxLayout(shot_group)
 
-        s1 = ttk_bs.Frame(shot_lf)
-        s1.pack(fill="x", pady=(0, 6))
+        s1 = QHBoxLayout()
+        s1.addWidget(QLabel("输入源:"))
+        self._shot_src_cb = QComboBox()
+        self._shot_src_cb.setFixedWidth(200)
+        s1.addWidget(self._shot_src_cb)
+        btn_refresh = QPushButton("🔄")
+        btn_refresh.setProperty("outline", True)
+        btn_refresh.clicked.connect(self._load_sources)
+        s1.addWidget(btn_refresh)
+        s1.addStretch()
+        shot_layout.addLayout(s1)
 
-        ttk_bs.Label(s1, text="输入源:").pack(side="left")
-        self._shot_src_var = tk.StringVar()
-        self._shot_src_cb = ttk_bs.Combobox(
-            s1, textvariable=self._shot_src_var, width=22, state="readonly"
+        s2 = QHBoxLayout()
+        s2.addWidget(QLabel("格式:"))
+        self._fmt_cb = QComboBox()
+        self._fmt_cb.addItems(["jpg", "png", "webp", "bmp"])
+        self._fmt_cb.setFixedWidth(70)
+        s2.addWidget(self._fmt_cb)
+
+        s2.addWidget(QLabel("质量:"))
+        self._quality_slider = QSlider(Qt.Horizontal)
+        self._quality_slider.setRange(1, 100)
+        self._quality_slider.setValue(85)
+        self._quality_slider.setFixedWidth(120)
+        s2.addWidget(self._quality_slider)
+
+        self._quality_lbl = QLabel("85")
+        self._quality_lbl.setFixedWidth(30)
+        self._quality_slider.valueChanged.connect(
+            lambda v: self._quality_lbl.setText(str(v))
         )
-        self._shot_src_cb.pack(side="left", padx=6)
-        ttk_bs.Button(s1, text="🔄", bootstyle="secondary-outline",
-                      command=self._load_sources).pack(side="left")
+        s2.addWidget(self._quality_lbl)
+        s2.addStretch()
+        shot_layout.addLayout(s2)
 
-        s2 = ttk_bs.Frame(shot_lf)
-        s2.pack(fill="x", pady=(0, 6))
-        ttk_bs.Label(s2, text="格式:").pack(side="left")
-        self._fmt_var = tk.StringVar(value="jpg")
-        ttk_bs.Combobox(
-            s2, textvariable=self._fmt_var,
-            values=["jpg", "png", "webp", "bmp"],
-            width=8, state="readonly"
-        ).pack(side="left", padx=6)
-        ttk_bs.Label(s2, text="质量:").pack(side="left")
-        self._quality_var = tk.IntVar(value=85)
-        ttk_bs.Scale(
-            s2, from_=1, to=100, orient="horizontal",
-            variable=self._quality_var, length=120,
-        ).pack(side="left", padx=4)
-        self._quality_lbl = ttk_bs.Label(s2, text="85", width=4)
-        self._quality_lbl.pack(side="left")
-        self._quality_var.trace_add(
-            "write",
-            lambda *_: self._quality_lbl.config(text=str(self._quality_var.get()))
-        )
-
-        ttk_bs.Button(
-            shot_lf, text="📸 立即截图", bootstyle="primary", width=16,
-            command=self._take_screenshot,
-        ).pack(anchor="w", pady=4)
+        btn_shot = QPushButton("📸 立即截图")
+        btn_shot.clicked.connect(self._take_screenshot)
+        shot_layout.addWidget(btn_shot)
 
         # 缩略图显示
-        self._thumb_canvas = tk.Canvas(
-            shot_lf, width=THUMB_W, height=THUMB_H,
-            bg="#1a1a1a", highlightthickness=1, highlightbackground="#444"
+        self._thumb_label = QLabel()
+        self._thumb_label.setFixedSize(THUMB_W, THUMB_H)
+        self._thumb_label.setAlignment(Qt.AlignCenter)
+        self._thumb_label.setStyleSheet(
+            "background-color: #1a1a1a; border: 1px solid #444444;"
         )
-        self._thumb_canvas.pack(pady=4)
-        self._thumb_canvas.create_text(
-            THUMB_W // 2, THUMB_H // 2,
-            text="截图预览", fill="#555", tags="placeholder"
-        )
+        self._thumb_label.setText("截图预览")
+        shot_layout.addWidget(self._thumb_label, alignment=Qt.AlignCenter)
+
+        layout.addWidget(shot_group)
+        layout.addStretch()
 
     # ── 回放缓冲控制 ──────────────────────────────────────────
 
@@ -120,27 +128,26 @@ class ReplayTab:
         if ctrl is None:
             return
         if not self._replay_on:
-            run_in_thread(self.root, ctrl.start_replay_buffer,
-                          lambda _: self._set_replay(True))
+            run_in_thread(ctrl.start_replay_buffer, lambda _: self._set_replay(True))
         else:
-            run_in_thread(self.root, ctrl.stop_replay_buffer,
-                          lambda _: self._set_replay(False))
+            run_in_thread(ctrl.stop_replay_buffer, lambda _: self._set_replay(False))
 
     def _set_replay(self, on: bool) -> None:
         self._replay_on = on
-        self._buf_btn.config(
-            text="⏹ 停止缓冲" if on else "▶ 启动缓冲",
-            bootstyle="danger" if on else "success",
-        )
+        self._buf_btn.setText("⏹ 停止缓冲" if on else "▶ 启动缓冲")
+        if on:
+            self._buf_btn.setProperty("danger", True)
+        else:
+            self._buf_btn.setProperty("success", True)
+        self._buf_btn.style().polish(self._buf_btn)
 
     def _save_replay(self) -> None:
         ctrl = self.app.ctrl
         if ctrl is None:
             return
         run_in_thread(
-            self.root,
             ctrl.save_replay_buffer,
-            lambda res: self._on_replay_saved(res),
+            self._on_replay_saved,
         )
 
     def _on_replay_saved(self, res) -> None:
@@ -150,7 +157,7 @@ class ReplayTab:
             path = res.saved_replay_path
         else:
             path = str(res)
-        self._saved_path_var.set(path or "（已保存）")
+        self._saved_path_label.setText(path or "（已保存）")
 
     # ── 截图 ─────────────────────────────────────────────────
 
@@ -158,7 +165,7 @@ class ReplayTab:
         ctrl = self.app.ctrl
         if ctrl is None:
             return
-        run_in_thread(self.root, ctrl.get_input_list, self._on_sources)
+        run_in_thread(ctrl.get_input_list, self._on_sources)
 
     def _on_sources(self, inputs: list) -> None:
         names = []
@@ -166,29 +173,21 @@ class ReplayTab:
             n = inp if isinstance(inp, str) else inp.get("name", "")
             if n:
                 names.append(n)
-        self._shot_src_cb["values"] = names
-        # 也尝试加载当前场景名
-        try:
-            scene = self.app.ctrl.get_current_scene()
-            if scene and scene not in names:
-                names.insert(0, scene)
-                self._shot_src_cb["values"] = names
-        except Exception:
-            pass
+        self._shot_src_cb.clear()
+        self._shot_src_cb.addItems(names)
         if names:
-            self._shot_src_var.set(names[0])
+            self._shot_src_cb.setCurrentIndex(0)
 
     def _take_screenshot(self) -> None:
         ctrl = self.app.ctrl
         if ctrl is None:
             return
-        src     = self._shot_src_var.get()
-        fmt     = self._fmt_var.get()
-        quality = self._quality_var.get()
+        src = self._shot_src_cb.currentText()
+        fmt = self._fmt_cb.currentText()
+        quality = self._quality_slider.value()
         if not src:
             return
         run_in_thread(
-            self.root,
             lambda: ctrl.get_source_screenshot(
                 source_name=src, img_format=fmt,
                 width=THUMB_W * 2, height=THUMB_H * 2,
@@ -201,18 +200,18 @@ class ReplayTab:
         try:
             if "," in b64:
                 b64 = b64.split(",", 1)[1]
-            raw   = base64.b64decode(b64)
-            img   = Image.open(io.BytesIO(raw)).resize(
-                (THUMB_W, THUMB_H), Image.BILINEAR
-            )
-            photo = ImageTk.PhotoImage(img)
-            self._thumb_canvas.delete("all")
-            self._thumb_canvas.create_image(0, 0, anchor="nw", image=photo)
-            self._thumb_photo = photo  # 保持引用
+            raw = base64.b64decode(b64)
+            img = QImage()
+            img.loadFromData(raw)
+            if not img.isNull():
+                scaled = img.scaled(
+                    THUMB_W, THUMB_H,
+                    Qt.KeepAspectRatio, Qt.SmoothTransformation,
+                )
+                self._thumb_label.setPixmap(QPixmap.fromImage(scaled))
+                self._thumb_label.setText("")
         except Exception:
             pass
-
-    # ── 刷新入口 ──────────────────────────────────────────────
 
     def refresh(self) -> None:
         self._load_sources()

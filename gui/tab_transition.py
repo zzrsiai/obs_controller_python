@@ -1,11 +1,15 @@
 """
-gui/tab_transition.py  ——  转场控制标签页
+gui/tab_transition.py  ——  转场控制标签页（PyQt5 版）
 """
 from __future__ import annotations
-import tkinter as tk
+
 from typing import TYPE_CHECKING
 
-import ttkbootstrap as ttk_bs
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QLabel, QComboBox, QSpinBox, QSlider,
+)
+from PyQt5.QtCore import Qt
 
 from .utils import run_in_thread, FONT_BOLD
 
@@ -13,84 +17,84 @@ if TYPE_CHECKING:
     from .app import OBSGui
 
 
-class TransitionTab:
+class TransitionTab(QWidget):
     """转场名称 / 时长 / T-Bar / Studio 模式切换。"""
 
-    def __init__(self, notebook: ttk_bs.Notebook, app: "OBSGui"):
+    def __init__(self, parent, app: "OBSGui"):
+        super().__init__(parent)
         self.app = app
-        self.root = app.root
-        self.frame = ttk_bs.Frame(notebook, padding=12)
-        notebook.add(self.frame, text="🎞 转场")
+        self._studio_on = False
         self._build()
 
     def _build(self) -> None:
-        ttk_bs.Label(self.frame, text="转场控制", font=FONT_BOLD).pack(
-            anchor="w", pady=(0, 8)
-        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        layout.addWidget(QLabel("转场控制"))
 
         # 转场选择
-        row1 = ttk_bs.Frame(self.frame)
-        row1.pack(fill="x", pady=4)
-        ttk_bs.Label(row1, text="转场效果:", width=12).pack(side="left")
-        self._trans_var = tk.StringVar()
-        self._trans_cb = ttk_bs.Combobox(
-            row1, textvariable=self._trans_var, width=24, state="readonly"
-        )
-        self._trans_cb.pack(side="left", padx=4)
-        ttk_bs.Button(row1, text="🔄", bootstyle="secondary-outline",
-                      command=self._load_transitions).pack(side="left", padx=4)
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("转场效果:"))
+        self._trans_cb = QComboBox()
+        self._trans_cb.setFixedWidth(200)
+        row1.addWidget(self._trans_cb)
+        btn_refresh = QPushButton("🔄")
+        btn_refresh.setProperty("outline", True)
+        btn_refresh.clicked.connect(self._load_transitions)
+        row1.addWidget(btn_refresh)
+        row1.addStretch()
+        layout.addLayout(row1)
 
         # 转场时长
-        row2 = ttk_bs.Frame(self.frame)
-        row2.pack(fill="x", pady=4)
-        ttk_bs.Label(row2, text="时长 (ms):", width=12).pack(side="left")
-        self._duration_var = tk.IntVar(value=300)
-        ttk_bs.Spinbox(
-            row2, textvariable=self._duration_var,
-            from_=0, to=10000, increment=100, width=8
-        ).pack(side="left", padx=4)
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("时长 (ms):"))
+        self._duration_spin = QSpinBox()
+        self._duration_spin.setRange(0, 10000)
+        self._duration_spin.setSingleStep(100)
+        self._duration_spin.setValue(300)
+        row2.addWidget(self._duration_spin)
+        row2.addStretch()
+        layout.addLayout(row2)
 
         # 应用按钮
-        ttk_bs.Button(
-            self.frame, text="应用转场设置", bootstyle="primary",
-            command=self._apply_transition
-        ).pack(anchor="w", pady=8)
+        btn_apply = QPushButton("应用转场设置")
+        btn_apply.clicked.connect(self._apply_transition)
+        layout.addWidget(btn_apply)
 
-        ttk_bs.Separator(self.frame, orient="horizontal").pack(fill="x", pady=8)
+        layout.addSpacing(8)
 
         # T-Bar
-        ttk_bs.Label(self.frame, text="T-Bar 手动过渡", font=FONT_BOLD).pack(anchor="w")
-        tbar_row = ttk_bs.Frame(self.frame)
-        tbar_row.pack(fill="x", pady=6)
-        ttk_bs.Label(tbar_row, text="0%").pack(side="left")
-        self._tbar_var = tk.DoubleVar(value=0.0)
-        self._tbar = ttk_bs.Scale(
-            tbar_row, from_=0.0, to=1.0, orient="horizontal",
-            variable=self._tbar_var, length=260,
-            command=self._on_tbar,
-        )
-        self._tbar.pack(side="left", padx=6)
-        ttk_bs.Label(tbar_row, text="100%").pack(side="left")
+        layout.addWidget(QLabel("T-Bar 手动过渡"))
+        tbar_row = QHBoxLayout()
+        tbar_row.addWidget(QLabel("0%"))
+        self._tbar = QSlider(Qt.Horizontal)
+        self._tbar.setRange(0, 100)
+        self._tbar.setValue(0)
+        self._tbar.setFixedWidth(260)
+        self._tbar.valueChanged.connect(self._on_tbar)
+        tbar_row.addWidget(self._tbar)
+        tbar_row.addWidget(QLabel("100%"))
+        tbar_row.addStretch()
+        layout.addLayout(tbar_row)
 
-        # 实数显示
-        self._tbar_label = ttk_bs.Label(
-            self.frame, text="当前位置: 0.00", bootstyle="info"
-        )
-        self._tbar_label.pack(anchor="w")
+        self._tbar_label = QLabel("当前位置: 0.00")
+        self._tbar_label.setStyleSheet("color: #375a7f;")
+        layout.addWidget(self._tbar_label)
 
-        ttk_bs.Separator(self.frame, orient="horizontal").pack(fill="x", pady=8)
+        layout.addSpacing(8)
 
         # Studio Mode
-        ttk_bs.Label(self.frame, text="Studio 模式", font=FONT_BOLD).pack(anchor="w")
-        studio_row = ttk_bs.Frame(self.frame)
-        studio_row.pack(fill="x", pady=4)
-        self._studio_btn = ttk_bs.Button(
-            studio_row, text="开启 Studio 模式",
-            bootstyle="info-outline", width=22,
-            command=self._toggle_studio,
-        )
-        self._studio_btn.pack(side="left")
-        self._studio_on = False
+        layout.addWidget(QLabel("Studio 模式"))
+        studio_row = QHBoxLayout()
+        self._studio_btn = QPushButton("开启 Studio 模式")
+        self._studio_btn.setProperty("outline", True)
+        self._studio_btn.setFixedWidth(180)
+        self._studio_btn.clicked.connect(self._toggle_studio)
+        studio_row.addWidget(self._studio_btn)
+        studio_row.addStretch()
+        layout.addLayout(studio_row)
+
+        layout.addStretch()
 
     # ── 刷新转场列表 ──────────────────────────────────────────
 
@@ -98,22 +102,18 @@ class TransitionTab:
         ctrl = self.app.ctrl
         if ctrl is None:
             return
-        run_in_thread(
-            self.root,
-            ctrl.get_transition_list,
-            self._on_transitions,
-        )
+        run_in_thread(ctrl.get_transition_list, self._on_transitions)
 
     def _on_transitions(self, data) -> None:
         if isinstance(data, dict):
             transitions = data.get("transitions", [])
-            current     = data.get("currentTransitionName", "")
+            current = data.get("currentTransitionName", "")
         elif hasattr(data, "transitions"):
             transitions = data.transitions
-            current     = getattr(data, "current_scene_transition_name", "")
+            current = getattr(data, "current_scene_transition_name", "")
         else:
             transitions = []
-            current     = ""
+            current = ""
 
         names = []
         for t in transitions:
@@ -122,11 +122,11 @@ class TransitionTab:
             elif hasattr(t, "transition_name"):
                 names.append(t.transition_name)
 
-        self._trans_cb["values"] = names
-        if current in names:
-            self._trans_var.set(current)
-        elif names:
-            self._trans_var.set(names[0])
+        self._trans_cb.clear()
+        self._trans_cb.addItems(names)
+        idx = names.index(current) if current in names else 0
+        if names:
+            self._trans_cb.setCurrentIndex(idx)
 
     # ── 应用转场 ──────────────────────────────────────────────
 
@@ -134,12 +134,11 @@ class TransitionTab:
         ctrl = self.app.ctrl
         if ctrl is None:
             return
-        name     = self._trans_var.get()
-        duration = self._duration_var.get()
+        name = self._trans_cb.currentText()
+        duration = self._duration_spin.value()
         if name:
             self.app.log(f"转场设置: {name} / {duration}ms", "INFO")
             run_in_thread(
-                self.root,
                 lambda: (
                     ctrl.set_current_transition(name),
                     ctrl.set_transition_duration(duration),
@@ -148,13 +147,13 @@ class TransitionTab:
 
     # ── T-Bar ─────────────────────────────────────────────────
 
-    def _on_tbar(self, val: str) -> None:
-        v = float(val)
-        self._tbar_label.config(text=f"当前位置: {v:.2f}")
+    def _on_tbar(self, val: int) -> None:
+        v = val / 100.0
+        self._tbar_label.setText(f"当前位置: {v:.2f}")
         ctrl = self.app.ctrl
         if ctrl is None:
             return
-        run_in_thread(self.root, lambda: ctrl.set_tbar_position(v))
+        run_in_thread(lambda: ctrl.set_tbar_position(v))
 
     # ── Studio 模式 ───────────────────────────────────────────
 
@@ -164,7 +163,6 @@ class TransitionTab:
             return
         self._studio_on = not self._studio_on
         run_in_thread(
-            self.root,
             lambda: ctrl.req.set_studio_mode_enabled(
                 studio_mode_enabled=self._studio_on
             ),
@@ -173,17 +171,14 @@ class TransitionTab:
 
     def _update_studio_btn(self) -> None:
         if self._studio_on:
-            self._studio_btn.config(
-                text="关闭 Studio 模式", bootstyle="warning"
-            )
+            self._studio_btn.setText("关闭 Studio 模式")
+            self._studio_btn.setProperty("warning", True)
             self.app.log("Studio 模式已开启", "INFO")
         else:
-            self._studio_btn.config(
-                text="开启 Studio 模式", bootstyle="info-outline"
-            )
+            self._studio_btn.setText("开启 Studio 模式")
+            self._studio_btn.setProperty("outline", True)
             self.app.log("Studio 模式已关闭", "INFO")
-
-    # ── 供外部（App）调用 ─────────────────────────────────────
+        self._studio_btn.style().polish(self._studio_btn)
 
     def refresh(self) -> None:
         self._load_transitions()

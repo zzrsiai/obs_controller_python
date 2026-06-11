@@ -1,14 +1,19 @@
 """
-gui/tab_audio.py  ——  音频混音台标签页
+gui/tab_audio.py  ——  音频混音台标签页（PyQt5 版）
 每路音频：名称 | 音量滑块 | dB 显示 | 静音按钮 | VU 表
 """
 from __future__ import annotations
-import tkinter as tk
+
 from typing import TYPE_CHECKING
 
-import ttkbootstrap as ttk_bs
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QLabel, QSlider, QGroupBox, QScrollArea,
+)
+from PyQt5.QtGui import QPainter, QColor, QPen
+from PyQt5.QtCore import Qt
 
-from .utils import run_in_thread, FONT_BOLD, FONT_LABEL, CLR_GREEN, CLR_YELLOW, CLR_RED
+from .utils import run_in_thread, FONT_BOLD, CLR_GREEN, CLR_YELLOW, CLR_RED
 
 if TYPE_CHECKING:
     from .app import OBSGui
@@ -21,91 +26,31 @@ VU_COLORS = [
     ( -6,   0, CLR_RED),
 ]
 
-VU_W, VU_H = 120, 10   # VU 条尺寸
+VU_W, VU_H = 120, 10
 
 
-class AudioChannel:
-    """单路音频 UI 行。"""
+class VUMeter(QWidget):
+    """简易 VU 电平表。"""
 
-    def __init__(self, parent: tk.Widget, name: str, app: "OBSGui"):
-        self.name = name
-        self.app  = app
-        self.root = app.root
-        self._muted = False
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(VU_W, VU_H)
+        self._db = -60.0
 
-        row = ttk_bs.Frame(parent, padding=(4, 2))
-        row.pack(fill="x", pady=1)
+    def set_db(self, db: float) -> None:
+        self._db = max(-60.0, min(0.0, db))
+        self.update()
 
-        # 名称
-        ttk_bs.Label(row, text=name[:22], width=22, font=FONT_LABEL).pack(
-            side="left"
-        )
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setPen(Qt.NoPen)
 
-        # 音量滑块 (-60 ~ 0 dB → 映射到 0~1 的 mul)
-        self._vol_var = tk.DoubleVar(value=100.0)   # 0..100
-        self._slider = ttk_bs.Scale(
-            row, from_=0, to=100, orient="horizontal",
-            variable=self._vol_var, length=160,
-            command=self._on_volume,
-        )
-        self._slider.pack(side="left", padx=4)
-
-        # dB 显示
-        self._db_label = ttk_bs.Label(row, text="  0 dB", width=8, font=FONT_LABEL)
-        self._db_label.pack(side="left")
-
-        # 静音按钮
-        self._mute_btn = ttk_bs.Button(
-            row, text="🔊", width=3, bootstyle="secondary-outline",
-            command=self._on_mute
-        )
-        self._mute_btn.pack(side="left", padx=4)
-
-        # VU 表 Canvas
-        self._vu = tk.Canvas(row, width=VU_W, height=VU_H,
-                             bg="#1a1a1a", highlightthickness=0)
-        self._vu.pack(side="left", padx=4)
-        self._draw_vu(-60)
-
-    # ── 回调 ─────────────────────────────────────────────────
-
-    def _on_volume(self, val: str) -> None:
-        v = float(val)
-        # 0~100 → 0.0~1.0 mul
-        mul = v / 100.0
-        db  = 20 * (max(mul, 1e-6) ** (1/2)) - 60   # 近似 dB 显示
-        db_str = f"{(v - 60):.0f} dB"
-        self._db_label.config(text=db_str.rjust(7))
-        ctrl = self.app.ctrl
-        if ctrl is None:
-            return
-        run_in_thread(self.root, lambda: ctrl.set_input_volume(self.name, mul=mul))
-
-    def _on_mute(self) -> None:
-        ctrl = self.app.ctrl
-        if ctrl is None:
-            return
-        self._muted = not self._muted
-        self._mute_btn.config(text="🔇" if self._muted else "🔊")
-        run_in_thread(
-            self.root,
-            lambda: ctrl.set_input_mute(self.name, self._muted),
-        )
-
-    # ── VU 表 ────────────────────────────────────────────────
-
-    def update_vu(self, db: float) -> None:
-        """外部（主线程）调用，更新 VU 表。"""
-        self._draw_vu(db)
-
-    def _draw_vu(self, db: float) -> None:
-        db = max(-60.0, min(0.0, db))
-        ratio = (db + 60) / 60.0   # 0..1
-        fill_w = int(VU_W * ratio)
-        self._vu.delete("all")
         # 背景
-        self._vu.create_rectangle(0, 0, VU_W, VU_H, fill="#1a1a1a", outline="")
-        # 分段颜色
+        p.fillRect(0, 0, VU_W, VU_H, QColor("#1a1a1a"))
+
+        ratio = (self._db + 60) / 60.0
+        fill_w = int(VU_W * ratio)
+
         x = 0
         for lo, hi, color in VU_COLORS:
             seg_ratio_lo = (lo + 60) / 60.0
@@ -113,68 +58,129 @@ class AudioChannel:
             seg_x0 = int(VU_W * seg_ratio_lo)
             seg_x1 = int(VU_W * seg_ratio_hi)
             if fill_w > seg_x0:
-                self._vu.create_rectangle(
-                    seg_x0, 0, min(fill_w, seg_x1), VU_H,
-                    fill=color, outline=""
-                )
+                p.fillRect(seg_x0, 0, min(fill_w, seg_x1) - seg_x0, VU_H, QColor(color))
+
+        p.end()
+
+
+class AudioChannel(QWidget):
+    """单路音频 UI 行。"""
+
+    def __init__(self, parent, name: str, app: "OBSGui"):
+        super().__init__(parent)
+        self.name = name
+        self.app = app
+        self._muted = False
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(4, 2, 4, 2)
+
+        # 名称
+        name_label = QLabel(name[:22])
+        name_label.setFixedWidth(160)
+        row.addWidget(name_label)
+
+        # 音量滑块
+        self._slider = QSlider(Qt.Horizontal)
+        self._slider.setRange(0, 100)
+        self._slider.setValue(100)
+        self._slider.setFixedWidth(160)
+        self._slider.valueChanged.connect(self._on_volume)
+        row.addWidget(self._slider)
+
+        # dB 显示
+        self._db_label = QLabel("  0 dB")
+        self._db_label.setFixedWidth(60)
+        row.addWidget(self._db_label)
+
+        # 静音按钮
+        self._mute_btn = QPushButton("🔊")
+        self._mute_btn.setFixedWidth(36)
+        self._mute_btn.clicked.connect(self._on_mute)
+        row.addWidget(self._mute_btn)
+
+        # VU 表
+        self._vu = VUMeter()
+        row.addWidget(self._vu)
+
+        row.addStretch()
+
+    def _on_volume(self, val: int) -> None:
+        mul = val / 100.0
+        db_str = f"{(val - 60):.0f} dB"
+        self._db_label.setText(db_str.rjust(7))
+        ctrl = self.app.ctrl
+        if ctrl is None:
+            return
+        run_in_thread(lambda: ctrl.set_input_volume(self.name, mul=mul))
+
+    def _on_mute(self) -> None:
+        ctrl = self.app.ctrl
+        if ctrl is None:
+            return
+        self._muted = not self._muted
+        self._mute_btn.setText("🔇" if self._muted else "🔊")
+        run_in_thread(lambda: ctrl.set_input_mute(self.name, self._muted))
+
+    def update_vu(self, db: float) -> None:
+        self._vu.set_db(db)
 
     def set_volume(self, mul: float) -> None:
-        """外部更新滑块位置（0~1 mul）。"""
-        self._vol_var.set(mul * 100)
+        self._slider.blockSignals(True)
+        self._slider.setValue(int(mul * 100))
+        self._slider.blockSignals(False)
 
     def set_muted(self, muted: bool) -> None:
         self._muted = muted
-        self._mute_btn.config(text="🔇" if muted else "🔊")
+        self._mute_btn.setText("🔇" if muted else "🔊")
 
 
-class AudioTab:
+class AudioTab(QWidget):
     """音频混音台标签页。"""
 
-    def __init__(self, notebook: ttk_bs.Notebook, app: "OBSGui"):
+    def __init__(self, parent, app: "OBSGui"):
+        super().__init__(parent)
         self.app = app
-        self.root = app.root
         self._channels: dict[str, AudioChannel] = {}
-        self.frame = ttk_bs.Frame(notebook, padding=8)
-        notebook.add(self.frame, text="🎚 音频")
         self._build()
 
-    # ── 构建 ─────────────────────────────────────────────────
-
     def _build(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+
         # 顶部工具行
-        top = ttk_bs.Frame(self.frame)
-        top.pack(fill="x", pady=(0, 6))
-        ttk_bs.Label(top, text="音频混音台", font=FONT_BOLD).pack(side="left")
-        ttk_bs.Button(top, text="🔄 刷新", bootstyle="secondary-outline",
-                      command=self.refresh).pack(side="right")
+        top = QHBoxLayout()
+        top.addWidget(QLabel("音频混音台"))
+        top.addStretch()
+        btn_refresh = QPushButton("🔄 刷新")
+        btn_refresh.setProperty("outline", True)
+        btn_refresh.clicked.connect(self.refresh)
+        top.addWidget(btn_refresh)
+        layout.addLayout(top)
 
-        ttk_bs.Separator(self.frame, orient="horizontal").pack(fill="x", pady=4)
+        # 通道容器（带滚动区域）
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
 
-        # 表头
-        hdr = ttk_bs.Frame(self.frame, padding=(4, 0))
-        hdr.pack(fill="x")
-        for txt, w in [("输入源名称", 22), ("音量", 20), ("", 8), ("静音", 4), ("VU 表", 15)]:
-            ttk_bs.Label(hdr, text=txt, width=w, font=FONT_LABEL).pack(side="left")
+        self._container = QWidget()
+        self._container_layout = QVBoxLayout(self._container)
+        self._container_layout.setContentsMargins(0, 0, 0, 0)
+        self._container_layout.addStretch()
 
-        ttk_bs.Separator(self.frame, orient="horizontal").pack(fill="x", pady=2)
-
-        # 音频通道容器
-        self._scroll_frame = ttk_bs.Frame(self.frame)
-        self._scroll_frame.pack(fill="both", expand=True)
-        self._container = self._scroll_frame
-
-    # ── 刷新 ─────────────────────────────────────────────────
+        scroll.setWidget(self._container)
+        layout.addWidget(scroll)
 
     def refresh(self) -> None:
         ctrl = self.app.ctrl
         if ctrl is None:
             return
-        run_in_thread(self.root, ctrl.get_audio_inputs, self._on_inputs_loaded)
+        run_in_thread(ctrl.get_audio_inputs, self._on_inputs_loaded)
 
     def _on_inputs_loaded(self, inputs: list) -> None:
         # 清空旧通道
-        for w in self._container.winfo_children():
-            w.destroy()
+        for ch in self._channels.values():
+            ch.deleteLater()
         self._channels.clear()
 
         for inp in inputs:
@@ -183,9 +189,12 @@ class AudioTab:
                 continue
             ch = AudioChannel(self._container, name, self.app)
             self._channels[name] = ch
+            # 在 stretch 之前插入
+            self._container_layout.insertWidget(
+                self._container_layout.count() - 1, ch
+            )
             # 获取当前音量
             run_in_thread(
-                self.root,
                 lambda n=name: self.app.ctrl.get_input_volume(n),
                 lambda vol, n=name: self._apply_volume(n, vol),
             )
@@ -201,8 +210,6 @@ class AudioTab:
         else:
             mul = 1.0
         ch.set_volume(mul)
-
-    # ── 事件：VU 表更新（由 app 事件监听调用） ────────────────
 
     def update_vu(self, name: str, db: float) -> None:
         ch = self._channels.get(name)

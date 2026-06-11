@@ -1,11 +1,15 @@
 """
-gui/tab_stats.py  ——  统计 / 系统信息面板（右下角迷你面板模式）
+gui/tab_stats.py  ——  统计 / 系统信息面板（右下角迷你面板模式，PyQt5 版）
 """
 from __future__ import annotations
-import tkinter as tk
+
 from typing import TYPE_CHECKING
 
-import ttkbootstrap as ttk_bs
+from PyQt5.QtWidgets import (
+    QGroupBox, QVBoxLayout, QHBoxLayout, QPushButton,
+    QLabel, QGridLayout, QWidget,
+)
+from PyQt5.QtCore import Qt
 
 from .utils import run_in_thread, FONT_BIG, FONT_BOLD, FONT_LABEL, FONT_MONO
 
@@ -13,104 +17,98 @@ if TYPE_CHECKING:
     from .app import OBSGui
 
 
-class _StatCard(ttk_bs.Labelframe):
+class StatCard(QGroupBox):
     """单项统计卡片：大数字 + 单位标签。"""
 
-    def __init__(self, parent: tk.Widget, title: str, unit: str = "", bootstyle: str = "primary"):
-        super().__init__(parent, text=f" {title} ", bootstyle=bootstyle)
-        self._var = tk.StringVar(value="--")
-        ttk_bs.Label(self, textvariable=self._var, font=FONT_BIG).pack()
-        if unit:
-            ttk_bs.Label(self, text=unit, font=FONT_LABEL,
-                         bootstyle="secondary").pack()
+    def __init__(self, parent, title: str, color: str = "#375a7f"):
+        super().__init__(f" {title} ", parent)
+        self.setStyleSheet(f"""
+            QGroupBox {{
+                border: 1px solid {color};
+                border-radius: 4px;
+                margin-top: 10px;
+                padding-top: 14px;
+                color: {color};
+            }}
+            QGroupBox::title {{
+                color: {color};
+            }}
+        """)
+        layout = QVBoxLayout(self)
+        self._label = QLabel("--")
+        self._label.setAlignment(Qt.AlignCenter)
+        self._label.setStyleSheet(f"font-size: 16pt; font-weight: bold; color: {color};")
+        layout.addWidget(self._label)
 
     def set(self, value: str) -> None:
-        self._var.set(value)
+        self._label.setText(value)
 
 
-class StatsTab:
-    """统计/系统信息：嵌入右下角的紧凑统计面板。
+class StatsTab(QGroupBox):
+    """统计/系统信息：嵌入右下角的紧凑统计面板。"""
 
-    parent 可以是任意 Frame（不再要求 Notebook）。
-    """
-
-    def __init__(self, parent: tk.Widget, app: "OBSGui"):
+    def __init__(self, parent, app: "OBSGui"):
+        super().__init__(" 📊 实时统计 ", parent)
         self.app = app
-        self.root = app.root
-        # 外层 Labelframe，可折叠感
-        self.frame = ttk_bs.Labelframe(parent, text=" 📊 实时统计 ", padding=(6, 4))
-        self.frame.pack(fill="x")
         self._build()
 
-    # ── 构建 ─────────────────────────────────────────────────
-
     def _build(self) -> None:
-        # ── 第一行：统计卡片（紧凑，字体稍小） ──
-        card_row = ttk_bs.Frame(self.frame)
-        card_row.pack(fill="x", pady=(0, 4))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 4)
 
-        self._fps_card  = self._mini_card(card_row, "FPS",  "success")
-        self._cpu_card  = self._mini_card(card_row, "CPU%", "warning")
-        self._mem_card  = self._mini_card(card_row, "MEM MB","info")
-        self._disk_card = self._mini_card(card_row, "磁盘 GB","secondary")
+        # ── 统计卡片 ──
+        card_row = QHBoxLayout()
 
-        for i, card in enumerate([self._fps_card, self._cpu_card,
-                                   self._mem_card, self._disk_card]):
-            card.grid(row=0, column=i, padx=4, pady=2, sticky="ew")
-            card_row.columnconfigure(i, weight=1)
+        self._fps_card  = StatCard(card_row.widget(), "FPS",  "#00bc8c")
+        self._cpu_card  = StatCard(card_row.widget(), "CPU%", "#f39c12")
+        self._mem_card  = StatCard(card_row.widget(), "MEM MB", "#375a7f")
+        self._disk_card = StatCard(card_row.widget(), "磁盘 GB", "#aaaaaa")
 
-        # ── 第二行：版本/平台信息 + 快照按钮 ──
-        info_row = ttk_bs.Frame(self.frame)
-        info_row.pack(fill="x", pady=(2, 0))
+        card_row.addWidget(self._fps_card)
+        card_row.addWidget(self._cpu_card)
+        card_row.addWidget(self._mem_card)
+        card_row.addWidget(self._disk_card)
+        layout.addLayout(card_row)
 
-        # 版本信息（左侧，精简）
-        ver_frame = ttk_bs.Frame(info_row)
-        ver_frame.pack(side="left", fill="x", expand=True)
+        # ── 版本/平台信息 + 快照按钮 ──
+        info_row = QHBoxLayout()
 
-        self._ver_vars: dict[str, tk.StringVar] = {}
+        ver_layout = QVBoxLayout()
+        self._ver_vars: dict[str, QLabel] = {}
         for key, label in [("obsVersion", "OBS"), ("platform", "平台")]:
-            row = ttk_bs.Frame(ver_frame)
-            row.pack(fill="x", pady=0)
-            ttk_bs.Label(row, text=f"{label}:", font=FONT_LABEL,
-                         width=5, anchor="e").pack(side="left")
-            var = tk.StringVar(value="--")
+            row = QHBoxLayout()
+            lbl = QLabel(f"{label}:")
+            lbl.setFixedWidth(40)
+            lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            row.addWidget(lbl)
+            var = QLabel("--")
+            var.setStyleSheet("font-family: Consolas; color: #375a7f;")
+            row.addWidget(var)
             self._ver_vars[key] = var
-            ttk_bs.Label(row, textvariable=var, font=FONT_MONO,
-                         bootstyle="info").pack(side="left", padx=4)
+            ver_layout.addLayout(row)
 
-        # 也补充 obsWebSocketVersion（用于内部数据，不显示）
-        self._ver_vars["obsWebSocketVersion"] = tk.StringVar(value="--")
+        self._ver_vars["obsWebSocketVersion"] = QLabel("--")
+        info_row.addLayout(ver_layout)
+        info_row.addStretch()
 
-        # 帧统计变量（轻量版，不渲染到界面，仅内部保留供扩展）
-        self._frame_vars: dict[str, tk.StringVar] = {
-            k: tk.StringVar(value="--")
-            for k in ["totalFrames", "skippedFrames",
-                      "renderSkippedFrames", "dropFrameRate"]
-        }
+        # 快照按钮
+        btn_snap_save = QPushButton("💾")
+        btn_snap_save.setProperty("outline", True)
+        btn_snap_save.setFixedWidth(32)
+        btn_snap_save.clicked.connect(self._save_snapshot)
+        info_row.addWidget(btn_snap_save)
 
-        # 快照按钮（右侧）
-        btn_frame = ttk_bs.Frame(info_row)
-        btn_frame.pack(side="right")
+        btn_snap_load = QPushButton("📂")
+        btn_snap_load.setProperty("outline", True)
+        btn_snap_load.setFixedWidth(32)
+        btn_snap_load.clicked.connect(self._load_snapshot)
+        info_row.addWidget(btn_snap_load)
 
-        ttk_bs.Button(btn_frame, text="💾", bootstyle="primary-outline",
-                      width=3, command=self._save_snapshot).pack(
-            side="left", padx=2)
-        ttk_bs.Button(btn_frame, text="📂", bootstyle="secondary-outline",
-                      width=3, command=self._load_snapshot).pack(
-            side="left", padx=2)
+        self._snap_status = QLabel("")
+        self._snap_status.setStyleSheet("color: #00bc8c;")
+        info_row.addWidget(self._snap_status)
 
-        self._snap_status = ttk_bs.Label(btn_frame, text="", bootstyle="success",
-                                         font=FONT_LABEL)
-        self._snap_status.pack(side="left", padx=4)
-
-    def _mini_card(self, parent: tk.Widget, label: str, bootstyle: str) -> ttk_bs.Frame:
-        """创建紧凑型统计卡（Label + 数值变量）。"""
-        lf = ttk_bs.Labelframe(parent, text=f" {label} ", bootstyle=bootstyle)
-        var = tk.StringVar(value="--")
-        ttk_bs.Label(lf, textvariable=var,
-                     font=("Segoe UI", 13, "bold")).pack(padx=4, pady=2)
-        lf._var = var  # type: ignore[attr-defined]
-        return lf
+        layout.addLayout(info_row)
 
     # ── 刷新统计数据 ──────────────────────────────────────────
 
@@ -118,8 +116,8 @@ class StatsTab:
         ctrl = self.app.ctrl
         if ctrl is None:
             return
-        run_in_thread(self.root, ctrl.get_stats, self._on_stats)
-        run_in_thread(self.root, ctrl.get_version, self._on_version)
+        run_in_thread(ctrl.get_stats, self._on_stats)
+        run_in_thread(ctrl.get_version, self._on_version)
 
     def _on_stats(self, stats) -> None:
         def _get(obj, *keys):
@@ -137,27 +135,10 @@ class StatsTab:
         mem  = _get(stats, "memoryUsage", "memory_usage")
         disk = _get(stats, "availableDiskSpace", "available_disk_space")
 
-        self._fps_card._var.set(f"{fps:.1f}" if fps is not None else "--")  # type: ignore[attr-defined]
-        self._cpu_card._var.set(f"{cpu:.1f}" if cpu is not None else "--")  # type: ignore[attr-defined]
-        self._mem_card._var.set(f"{mem:.0f}" if mem is not None else "--")  # type: ignore[attr-defined]
-        if disk is not None:
-            self._disk_card._var.set(f"{disk/1024:.1f}")  # type: ignore[attr-defined]
-        else:
-            self._disk_card._var.set("--")  # type: ignore[attr-defined]
-
-        # 帧数（内部变量，保留兼容性）
-        total   = _get(stats, "outputTotalFrames",  "output_total_frames")  or 1
-        skipped = _get(stats, "outputSkippedFrames","output_skipped_frames") or 0
-        keys_map = {
-            "totalFrames":         ("outputTotalFrames",  "output_total_frames"),
-            "skippedFrames":       ("outputSkippedFrames","output_skipped_frames"),
-            "renderSkippedFrames": ("renderSkippedFrames","render_skipped_frames"),
-        }
-        for key, src_keys in keys_map.items():
-            val = _get(stats, *src_keys)
-            self._frame_vars[key].set(str(val) if val is not None else "--")
-        rate = (int(skipped) / int(total) * 100) if total else 0
-        self._frame_vars["dropFrameRate"].set(f"{rate:.2f}%")
+        self._fps_card.set(f"{fps:.1f}" if fps is not None else "--")
+        self._cpu_card.set(f"{cpu:.1f}" if cpu is not None else "--")
+        self._mem_card.set(f"{mem:.0f}" if mem is not None else "--")
+        self._disk_card.set(f"{disk/1024:.1f}" if disk is not None else "--")
 
     def _on_version(self, ver) -> None:
         def _get(obj, *keys):
@@ -170,12 +151,10 @@ class StatsTab:
                     return v
             return "--"
 
-        self._ver_vars["obsVersion"].set(
-            _get(ver, "obsVersion", "obs_version"))
-        self._ver_vars["obsWebSocketVersion"].set(
-            _get(ver, "obsWebSocketVersion", "obs_web_socket_version"))
-        self._ver_vars["platform"].set(
-            _get(ver, "platform", "platform"))
+        if "obsVersion" in self._ver_vars:
+            self._ver_vars["obsVersion"].setText(_get(ver, "obsVersion", "obs_version"))
+        if "platform" in self._ver_vars:
+            self._ver_vars["platform"].setText(_get(ver, "platform", "platform"))
 
     # ── 快照 ─────────────────────────────────────────────────
 
@@ -183,12 +162,13 @@ class StatsTab:
         ctrl = self.app.ctrl
         if ctrl is None:
             return
+
         def do_save():
             self._snapshot = ctrl.snapshot_state()
+
         run_in_thread(
-            self.root,
             do_save,
-            lambda _: self._snap_status.config(text="✅ 已保存"),
+            lambda _: self._snap_status.setText("✅ 已保存"),
         )
 
     def _load_snapshot(self) -> None:
@@ -197,10 +177,9 @@ class StatsTab:
             return
         snapshot = getattr(self, "_snapshot", None)
         if snapshot is None:
-            self._snap_status.config(text="⚠️ 先保存")
+            self._snap_status.setText("⚠️ 先保存")
             return
         run_in_thread(
-            self.root,
             lambda: ctrl.restore_state(snapshot),
-            lambda _: self._snap_status.config(text="✅ 已恢复"),
+            lambda _: self._snap_status.setText("✅ 已恢复"),
         )
