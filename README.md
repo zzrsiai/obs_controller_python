@@ -4,7 +4,6 @@
 
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
 ![OBS](https://img.shields.io/badge/OBS-28%2B-blueviolet)
-![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
